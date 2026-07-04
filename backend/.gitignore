@@ -1,0 +1,40 @@
+# Entorno virtual
+venv/
+.env/
+.venv/
+
+# Variables de entorno
+.env
+.env.local
+.env.example
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Archivos estáticos/build
+staticfiles/
+media/
+
+# IDEs
+.vscode/
+.idea/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Tests / coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
