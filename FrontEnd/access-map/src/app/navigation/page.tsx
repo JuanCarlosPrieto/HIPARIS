@@ -179,6 +179,7 @@ export default function NavigationPage() {
     useState<MobilityProfile>("wheelchair");
 
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
+  const [signedUrlsByFloorId, setSignedUrlsByFloorId] = useState<Record<string, string>>({});
   const [routeResult, setRouteResult] = useState<RouteResult | null>(null);
 
   const [loadingOrganizations, setLoadingOrganizations] = useState(true);
@@ -201,6 +202,23 @@ export default function NavigationPage() {
 
   const routeNodeIds = new Set(routeResult?.nodeIds ?? []);
   const routeEdgeIds = new Set(routeResult?.edgeIds ?? []);
+
+  const routeFloorIds = routeResult
+    ? Array.from(
+        new Set(
+          routeResult.nodeIds
+            .map((nodeId) => getElementById(nodeId)?.floor_id)
+            .filter((floorId): floorId is string => Boolean(floorId))
+        )
+      )
+    : [];
+
+  const displayedFloorIds =
+    routeResult && routeFloorIds.length > 0
+      ? routeFloorIds
+      : selectedFloorId
+      ? [selectedFloorId]
+      : [];
 
   const visibleElements = elements.filter(
     (element) => element.floor_id === selectedFloorId
@@ -227,6 +245,7 @@ export default function NavigationPage() {
     setElements([]);
     setEdges([]);
     setSignedUrl(null);
+    setSignedUrlsByFloorId({});
     setRouteResult(null);
     setSelectedBuildingId("");
     setSelectedFloorId("");
@@ -243,6 +262,7 @@ export default function NavigationPage() {
     setElements([]);
     setEdges([]);
     setSignedUrl(null);
+    setSignedUrlsByFloorId({});
     setRouteResult(null);
     setSelectedFloorId("");
     setFromElementId("");
@@ -327,7 +347,62 @@ export default function NavigationPage() {
   }
 
   setSignedUrl(data.signedUrl);
+  setSignedUrlsByFloorId((previous) => ({
+    ...previous,
+    [floorId]: data.signedUrl,
+  }));
 }
+
+  async function loadSignedUrlsForFloors(floorIds: string[]) {
+    const missingFloorIds = floorIds.filter(
+      (floorId) => !signedUrlsByFloorId[floorId]
+    );
+
+    if (missingFloorIds.length === 0) return;
+
+    const results = await Promise.all(
+      missingFloorIds.map(async (floorId) => {
+        const floor = floors.find((item) => item.id === floorId);
+
+        if (!floor?.plan_image_path) {
+          return {
+            floorId,
+            signedUrl: null,
+            error: null,
+          };
+        }
+
+        const { data, error } = await supabase.storage
+          .from("plan-images")
+          .createSignedUrl(floor.plan_image_path, 60 * 60);
+
+        return {
+          floorId,
+          signedUrl: data?.signedUrl ?? null,
+          error,
+        };
+      })
+    );
+
+    const firstError = results.find((result) => result.error);
+
+    if (firstError?.error) {
+      setErrorMessage(firstError.error.message);
+      return;
+    }
+
+    setSignedUrlsByFloorId((previous) => {
+      const next = { ...previous };
+
+      for (const result of results) {
+        if (result.signedUrl) {
+          next[result.floorId] = result.signedUrl;
+        }
+      }
+
+      return next;
+    });
+  }
 
   async function loadBuildings(organizationId: string) {
     setErrorMessage(null);
@@ -563,6 +638,29 @@ export default function NavigationPage() {
     return floors.find((floor) => floor.id === floorId) ?? null;
   }
 
+  function getSignedUrlForFloor(floorId: string) {
+    if (floorId === selectedFloorId && signedUrl) {
+      return signedUrl;
+    }
+
+    return signedUrlsByFloorId[floorId] ?? null;
+  }
+
+  function getElementsForFloor(floorId: string) {
+    return elements.filter((element) => element.floor_id === floorId);
+  }
+
+  function getEdgesForFloor(floorId: string) {
+    return edges.filter((edge) => {
+      const from = getElementById(edge.from_element_id);
+      const to = getElementById(edge.to_element_id);
+
+      if (!from || !to) return false;
+
+      return from.floor_id === floorId && to.floor_id === floorId;
+    });
+  }
+
   function getElementOptionLabel(element: AccessibleElement) {
     const floor = getFloorById(element.floor_id);
     const elementLabel = element.label || labelByType[element.type];
@@ -603,6 +701,16 @@ export default function NavigationPage() {
     }
 
     setRouteResult(result);
+
+    const routeFloorIdsToLoad = Array.from(
+      new Set(
+        result.nodeIds
+          .map((nodeId) => getElementById(nodeId)?.floor_id)
+          .filter((floorId): floorId is string => Boolean(floorId))
+      )
+    );
+
+    void loadSignedUrlsForFloors(routeFloorIdsToLoad);
 
     const origin = getElementById(fromElementId);
 
@@ -768,7 +876,9 @@ export default function NavigationPage() {
               <p className="mt-1 text-sm leading-6 text-slate-400">
                 {selectedOrganization?.name ?? "Organisation"} ·{" "}
                 {selectedBuilding?.name ?? "Bâtiment"} ·{" "}
-                {selectedFloor?.name ?? "Étage"}
+                {routeResult && routeFloorIds.length > 0
+                  ? `${routeFloorIds.length} étage${routeFloorIds.length > 1 ? "s" : ""} sur l'itinéraire`
+                  : selectedFloor?.name ?? "Étage"}
               </p>
             </div>
 
@@ -784,85 +894,118 @@ export default function NavigationPage() {
           )}
 
           {loadingMap ? (
-            <div className="flex min-h-[540px] items-center justify-center rounded-3xl bg-slate-900">
-              <div className="flex items-center gap-3 text-slate-300">
-                <Loader2 className="animate-spin" size={20} />
-                Chargement du plan...
-              </div>
+            <div className="flex min-h-[420px] items-center justify-center rounded-3xl border border-white/10 bg-slate-900">
+              <Loader2 className="animate-spin text-cyan-300" size={32} />
+              <span className="ml-3 text-slate-300">Chargement du plan...</span>
             </div>
-          ) : !signedUrl ? (
-            <div className="flex min-h-[540px] items-center justify-center rounded-3xl border border-dashed border-white/15 bg-slate-900 p-8 text-center">
-              <div>
-                <MapPin className="mx-auto mb-4 text-slate-500" size={42} />
-                <h3 className="text-xl font-semibold">Aucun plan sélectionné</h3>
-                <p className="mt-2 max-w-md text-sm leading-6 text-slate-400">
-                  Sélectionnez une organisation, un bâtiment et un étage publié.
-                </p>
-              </div>
-            </div>
+          ) : displayedFloorIds.length === 0 ? (
+            <EmptyState
+              icon={<MapPin size={30} />}
+              text="Sélectionnez une organisation, un bâtiment et un étage publié."
+            />
           ) : (
-            <div className="relative flex min-h-[420px] items-center justify-center overflow-auto rounded-3xl bg-slate-900 p-3 sm:min-h-[540px] sm:p-4">
-              <div className="relative inline-block">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={signedUrl}
-                  alt="Plan du bâtiment"
-                  className="block max-h-[72vh] max-w-full rounded-2xl border border-white/10"
-                />
+            <div className="space-y-6">
+              {displayedFloorIds.map((floorId) => {
+                const floor = getFloorById(floorId);
+                const floorSignedUrl = getSignedUrlForFloor(floorId);
+                const floorElements = getElementsForFloor(floorId);
+                const floorEdges = getEdgesForFloor(floorId);
 
-                <svg
-                  className="pointer-events-none absolute inset-0 h-full w-full"
-                  viewBox="0 0 100 100"
-                  preserveAspectRatio="none"
-                >
-                  {visibleEdges.map((edge) => {
-                    const from = getElementById(edge.from_element_id);
-                    const to = getElementById(edge.to_element_id);
+                return (
+                  <div
+                    key={floorId}
+                    className="space-y-3 rounded-3xl border border-white/10 bg-white/5 p-3 sm:p-4"
+                  >
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm text-slate-400">Étage de l'itinéraire</p>
+                        <h3 className="text-lg font-semibold text-white">
+                          {floor
+                            ? `${floor.name} · Niveau ${floor.level}`
+                            : "Étage inconnu"}
+                        </h3>
+                      </div>
 
-                    if (!from || !to) return null;
+                      {routeResult && routeFloorIds.includes(floorId) && (
+                        <span className="w-fit rounded-full bg-cyan-300 px-3 py-1 text-xs font-bold text-slate-950">
+                          Inclus dans la route
+                        </span>
+                      )}
+                    </div>
 
-                    const isAllowed = isEdgeAllowed(edge, mobilityProfile);
-                    const isInRoute = routeEdgeIds.has(edge.id);
-
-                    return (
-                      <line
-                        key={edge.id}
-                        x1={from.x * 100}
-                        y1={from.y * 100}
-                        x2={to.x * 100}
-                        y2={to.y * 100}
-                        stroke={
-                          isInRoute
-                            ? "#22d3ee"
-                            : isAllowed
-                              ? "#64748b"
-                              : "#f87171"
-                        }
-                        strokeWidth={isInRoute ? "2" : "0.55"}
-                        strokeLinecap="round"
-                        strokeDasharray={
-                          isInRoute
-                            ? "0"
-                            : edge.wheelchair_accessible
-                            ? "0"
-                            : "2 1.5"
-                        }
+                    {!floorSignedUrl ? (
+                      <EmptyState
+                        icon={<MapPin size={30} />}
+                        text="Aucun plan disponible pour cet étage."
                       />
-                    );
-                  })}
-                </svg>
+                    ) : (
+                      <div className="relative flex min-h-[420px] items-center justify-center overflow-auto rounded-3xl bg-slate-900 p-3 sm:min-h-[540px] sm:p-4">
+                        <div className="relative max-h-[720px] w-full max-w-4xl">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={floorSignedUrl}
+                            alt={`Plan accessible - ${
+                              floor ? `${floor.name}, niveau ${floor.level}` : "étage"
+                            }`}
+                            className="h-auto w-full rounded-2xl object-contain"
+                          />
 
-                <div className="pointer-events-none absolute inset-0">
-                  {visibleElements.map((element, index) => (
-                    <MapMarker
-                      key={element.id}
-                      element={element}
-                      index={index + 1}
-                      highlighted={routeNodeIds.has(element.id)}
-                    />
-                  ))}
-                </div>
-              </div>
+                          <svg
+                            className="pointer-events-none absolute inset-0 h-full w-full"
+                            viewBox="0 0 100 100"
+                            preserveAspectRatio="none"
+                          >
+                            {floorEdges.map((edge) => {
+                              const from = getElementById(edge.from_element_id);
+                              const to = getElementById(edge.to_element_id);
+
+                              if (!from || !to) return null;
+
+                              const isAllowed = isEdgeAllowed(edge, mobilityProfile);
+                              const isInRoute = routeEdgeIds.has(edge.id);
+
+                              return (
+                                <line
+                                  key={edge.id}
+                                  x1={from.x}
+                                  y1={from.y}
+                                  x2={to.x}
+                                  y2={to.y}
+                                  stroke={
+                                    isInRoute
+                                      ? "#67e8f9"
+                                      : isAllowed
+                                      ? "#94a3b8"
+                                      : "#f87171"
+                                  }
+                                  strokeWidth={isInRoute ? "2" : "0.55"}
+                                  strokeLinecap="round"
+                                  strokeDasharray={
+                                    isInRoute
+                                      ? "0"
+                                      : edge.wheelchair_accessible
+                                      ? "0"
+                                      : "2 1.5"
+                                  }
+                                />
+                              );
+                            })}
+                          </svg>
+
+                          {floorElements.map((element, index) => (
+                            <MapMarker
+                              key={element.id}
+                              element={element}
+                              index={index + 1}
+                              highlighted={routeNodeIds.has(element.id)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>
