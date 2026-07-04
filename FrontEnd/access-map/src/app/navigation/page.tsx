@@ -81,6 +81,31 @@ type AccessibleElement = {
   created_at: string;
 };
 
+type EdgeType =
+  | "corridor"
+  | "door"
+  | "ramp"
+  | "elevator"
+  | "stairs"
+  | "threshold"
+  | "manual";
+
+type SurfaceType =
+  | "normal"
+  | "slippery"
+  | "carpet"
+  | "irregular"
+  | "gravel"
+  | "unknown";
+
+type DoorType =
+  | "automatic"
+  | "manual_light"
+  | "manual_heavy"
+  | "push"
+  | "pull"
+  | "unknown";
+
 type RouteEdge = {
   id: string;
   floor_id: string;
@@ -92,6 +117,15 @@ type RouteEdge = {
   is_bidirectional: boolean;
   notes: string | null;
   created_at: string;
+
+  edge_type: EdgeType;
+  slope_percent: number | null;
+  width_cm: number | null;
+  step_height_cm: number | null;
+  surface_type: SurfaceType | null;
+  door_type: DoorType | null;
+  assistance_required: boolean | null;
+  accessibility_notes: string | null;
 };
 
 type MobilityProfile = "wheelchair" | "crutches" | "reduced_mobility";
@@ -100,6 +134,7 @@ type RouteResult = {
   nodeIds: string[];
   edgeIds: string[];
   totalDistance: number;
+  accessibilityCost: number;
   steps: RouteStep[];
 };
 
@@ -958,11 +993,23 @@ function calculateAccessibleRoute({
   for (const edge of edges) {
     if (!isEdgeAllowed(edge, mobilityProfile)) continue;
 
+    const cost = getEdgeCost(edge, mobilityProfile);
+
+    if (cost === null) continue;
+
     adjacency.get(edge.from_element_id)?.push({
       to: edge.to_element_id,
-      distance: edge.distance_meters,
+      distance: cost,
       edgeId: edge.id,
     });
+
+    if (edge.is_bidirectional) {
+      adjacency.get(edge.to_element_id)?.push({
+        to: edge.from_element_id,
+        distance: cost,
+        edgeId: edge.id,
+      });
+    }
 
     if (edge.is_bidirectional) {
       adjacency.get(edge.to_element_id)?.push({
@@ -1036,42 +1083,51 @@ function calculateAccessibleRoute({
 
   const steps = buildRouteSteps({
     nodeIds,
+    edgeIds,
     elements,
     edges,
     floors,
   });
 
+  const physicalDistance = edgeIds.reduce((sum, edgeId) => {
+    const edge = edges.find((item) => item.id === edgeId);
+    return sum + Number(edge?.distance_meters ?? 0);
+  }, 0);
+
   return {
     nodeIds,
     edgeIds,
-    totalDistance: finalDistance,
+    totalDistance: physicalDistance,
+    accessibilityCost: finalDistance,
     steps,
   };
 }
 
 function buildRouteSteps({
   nodeIds,
+  edgeIds,
   elements,
   edges,
   floors,
 }: {
   nodeIds: string[];
+  edgeIds: string[];
   elements: AccessibleElement[];
-  edges: RoutingEdge[];
+  edges: RouteEdge[];
   floors: Floor[];
 }): RouteStep[] {
   const elementById = new Map(elements.map((element) => [element.id, element]));
+  const edgeById = new Map(edges.map((edge) => [edge.id, edge]));
   const floorById = new Map(floors.map((floor) => [floor.id, floor]));
 
   const steps: RouteStep[] = [];
 
   for (let index = 0; index < nodeIds.length; index++) {
     const current = elementById.get(nodeIds[index]);
-    const next = elementById.get(nodeIds[index + 1]);
 
     if (!current) continue;
 
-    const currentFloor = floorById.get(current.floor_id);
+    const currentFloor = floorById.get(current.floor_id) ?? null;
     const currentLabel = current.label || labelByType[current.type];
 
     if (index === 0) {
@@ -1081,52 +1137,214 @@ function buildRouteSteps({
         title: currentLabel,
         instruction: `Départ depuis ${currentLabel}, ${currentFloor?.name ?? "étage inconnu"}.`,
       });
+
       continue;
     }
 
-    if (!next) {
-      steps.push({
-        nodeId: current.id,
-        floorId: current.floor_id,
-        title: currentLabel,
-        instruction: `Vous êtes arrivé à ${currentLabel}.`,
-      });
+    const previous = elementById.get(nodeIds[index - 1]);
+    const edge = edgeById.get(edgeIds[index - 1]);
+
+    if (!previous || !edge) {
       continue;
     }
 
-    const nextFloor = floorById.get(next.floor_id);
-    const nextLabel = next.label || labelByType[next.type];
+    const previousFloor = floorById.get(previous.floor_id) ?? null;
 
-    if (current.floor_id !== next.floor_id) {
-      steps.push({
-        nodeId: current.id,
-        floorId: current.floor_id,
-        title: currentLabel,
-        instruction: `Prenez ${currentLabel} pour aller vers ${nextFloor?.name ?? "l'étage suivant"}, niveau ${nextFloor?.level ?? "?"}.`,
-      });
-    } else {
-      steps.push({
-        nodeId: current.id,
-        floorId: current.floor_id,
-        title: currentLabel,
-        instruction: `Continuez vers ${nextLabel}.`,
-      });
-    }
+    const instruction = getEdgeInstruction({
+      edge,
+      from: previous,
+      to: current,
+      fromFloor: previousFloor,
+      toFloor: currentFloor,
+    });
+
+    steps.push({
+      nodeId: current.id,
+      floorId: current.floor_id,
+      title: currentLabel,
+      instruction,
+    });
   }
 
   return steps;
 }
 
 function isEdgeAllowed(edge: RouteEdge, mobilityProfile: MobilityProfile) {
+  const edgeType = edge.edge_type ?? "corridor";
+  const slope = edge.slope_percent ?? 0;
+  const width = edge.width_cm ?? null;
+  const stepHeight = edge.step_height_cm ?? 0;
+
   if (mobilityProfile === "wheelchair") {
-    return edge.wheelchair_accessible;
+    if (!edge.wheelchair_accessible) return false;
+
+    if (edgeType === "stairs") return false;
+
+    if (stepHeight > 2) return false;
+
+    if (edgeType === "ramp" && slope > 10) return false;
+
+    if (width !== null && width < 80) return false;
+
+    return true;
   }
 
   if (mobilityProfile === "crutches") {
-    return edge.crutches_accessible;
+    if (!edge.crutches_accessible) return false;
+
+    if (edgeType === "stairs") {
+      return true;
+    }
+
+    if (edgeType === "ramp" && slope > 12) return false;
+
+    return true;
   }
 
-  return edge.wheelchair_accessible || edge.crutches_accessible;
+  if (mobilityProfile === "reduced_mobility") {
+    if (!edge.wheelchair_accessible && !edge.crutches_accessible) return false;
+
+    if (edgeType === "stairs" && edge.assistance_required) return false;
+
+    if (edgeType === "ramp" && slope > 12) return false;
+
+    return true;
+  }
+
+  return false;
+}
+
+function getTypePenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
+  const edgeType = edge.edge_type ?? "corridor";
+
+  if (edgeType === "corridor") return 0;
+  if (edgeType === "elevator") return mobilityProfile === "wheelchair" ? 3 : 8;
+  if (edgeType === "door") return mobilityProfile === "wheelchair" ? 8 : 5;
+  if (edgeType === "threshold") return mobilityProfile === "wheelchair" ? 20 : 8;
+  if (edgeType === "ramp") return mobilityProfile === "wheelchair" ? 8 : 10;
+  if (edgeType === "stairs") {
+    if (mobilityProfile === "wheelchair") return 10_000;
+    if (mobilityProfile === "crutches") return 45;
+    return 35;
+  }
+
+  return 5;
+}
+
+function getSlopePenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
+  const slope = edge.slope_percent ?? 0;
+
+  if (slope <= 0) return 0;
+
+  if (mobilityProfile === "wheelchair") {
+    if (slope <= 5) return slope * 1.5;
+    if (slope <= 8) return 20 + slope * 4;
+    if (slope <= 10) return 60 + slope * 8;
+    return 10_000;
+  }
+
+  if (mobilityProfile === "crutches") {
+    if (slope <= 5) return slope;
+    if (slope <= 8) return 12 + slope * 2;
+    if (slope <= 12) return 35 + slope * 4;
+    return 10_000;
+  }
+
+  if (slope <= 5) return slope;
+  if (slope <= 8) return 10 + slope * 2;
+  if (slope <= 12) return 25 + slope * 3;
+
+  return 10_000;
+}
+
+function getWidthPenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
+  const width = edge.width_cm;
+
+  if (width === null || width === undefined) {
+    return 5;
+  }
+
+  if (mobilityProfile === "wheelchair") {
+    if (width >= 140) return 0;
+    if (width >= 120) return 10;
+    if (width >= 90) return 35;
+    if (width >= 80) return 80;
+    return 10_000;
+  }
+
+  if (mobilityProfile === "crutches") {
+    if (width >= 120) return 0;
+    if (width >= 90) return 8;
+    if (width >= 75) return 25;
+    return 80;
+  }
+
+  if (width >= 120) return 0;
+  if (width >= 90) return 10;
+  return 35;
+}
+
+function getStepPenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
+  const stepHeight = edge.step_height_cm ?? 0;
+
+  if (stepHeight <= 0) return 0;
+
+  if (mobilityProfile === "wheelchair") {
+    if (stepHeight <= 2) return 15;
+    return 10_000;
+  }
+
+  if (mobilityProfile === "crutches") {
+    if (stepHeight <= 2) return 5;
+    if (stepHeight <= 10) return 25;
+    return 60;
+  }
+
+  if (stepHeight <= 2) return 5;
+  if (stepHeight <= 10) return 20;
+  return 45;
+}
+
+function getSurfacePenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
+  const surface = edge.surface_type ?? "normal";
+
+  if (surface === "normal") return 0;
+  if (surface === "unknown") return 5;
+
+  if (mobilityProfile === "wheelchair") {
+    if (surface === "carpet") return 20;
+    if (surface === "irregular") return 45;
+    if (surface === "gravel") return 80;
+    if (surface === "slippery") return 35;
+  }
+
+  if (mobilityProfile === "crutches") {
+    if (surface === "carpet") return 8;
+    if (surface === "irregular") return 35;
+    if (surface === "gravel") return 45;
+    if (surface === "slippery") return 60;
+  }
+
+  if (surface === "carpet") return 8;
+  if (surface === "irregular") return 25;
+  if (surface === "gravel") return 35;
+  if (surface === "slippery") return 40;
+
+  return 0;
+}
+
+function getDoorPenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
+  if ((edge.edge_type ?? "corridor") !== "door") return 0;
+
+  const doorType = edge.door_type ?? "unknown";
+
+  if (doorType === "automatic") return 0;
+  if (doorType === "manual_light") return mobilityProfile === "wheelchair" ? 8 : 5;
+  if (doorType === "manual_heavy") return mobilityProfile === "wheelchair" ? 45 : 25;
+  if (doorType === "pull") return mobilityProfile === "wheelchair" ? 35 : 15;
+  if (doorType === "push") return mobilityProfile === "wheelchair" ? 20 : 10;
+
+  return mobilityProfile === "wheelchair" ? 15 : 8;
 }
 
 function Panel({
@@ -1260,6 +1478,38 @@ function EmptyState({
   );
 }
 
+function getEdgeCost(
+  edge: RouteEdge,
+  mobilityProfile: MobilityProfile
+): number | null {
+  if (!isEdgeAllowed(edge, mobilityProfile)) {
+    return null;
+  }
+
+  const baseDistance = Number(edge.distance_meters ?? 0);
+
+  if (!Number.isFinite(baseDistance) || baseDistance <= 0) {
+    return null;
+  }
+
+  let penalty = 0;
+
+  penalty += getTypePenalty(edge, mobilityProfile);
+  penalty += getSlopePenalty(edge, mobilityProfile);
+  penalty += getWidthPenalty(edge, mobilityProfile);
+  penalty += getStepPenalty(edge, mobilityProfile);
+  penalty += getSurfacePenalty(edge, mobilityProfile);
+  penalty += getDoorPenalty(edge, mobilityProfile);
+
+  if (edge.assistance_required) {
+    if (mobilityProfile === "wheelchair") penalty += 80;
+    if (mobilityProfile === "crutches") penalty += 45;
+    if (mobilityProfile === "reduced_mobility") penalty += 35;
+  }
+
+  return baseDistance + penalty;
+}
+
 function LegendItem({
   icon,
   text,
@@ -1273,4 +1523,57 @@ function LegendItem({
       <span>{text}</span>
     </div>
   );
+}
+
+function getEdgeInstruction({
+  edge,
+  from,
+  to,
+  fromFloor,
+  toFloor,
+}: {
+  edge: RouteEdge;
+  from: AccessibleElement;
+  to: AccessibleElement;
+  fromFloor: Floor | null;
+  toFloor: Floor | null;
+}) {
+  const toLabel = to.label || labelByType[to.type];
+  const distance = Number(edge.distance_meters ?? 0).toFixed(1);
+  const edgeType = edge.edge_type ?? "corridor";
+
+  if (from.floor_id !== to.floor_id || edgeType === "elevator") {
+    return `Prenez l'ascenseur vers ${toFloor?.name ?? "l'étage suivant"}, niveau ${toFloor?.level ?? "?"}.`;
+  }
+
+  if (edgeType === "ramp") {
+    const slopeText =
+      edge.slope_percent !== null && edge.slope_percent !== undefined
+        ? ` avec une pente d'environ ${edge.slope_percent}%`
+        : "";
+
+    return `Prenez la rampe sur ${distance} m${slopeText}, vers ${toLabel}.`;
+  }
+
+  if (edgeType === "door") {
+    if (edge.door_type === "automatic") {
+      return `Passez la porte automatique puis continuez vers ${toLabel}.`;
+    }
+
+    if (edge.door_type === "manual_heavy") {
+      return `Passez la porte manuelle lourde puis continuez vers ${toLabel}.`;
+    }
+
+    return `Passez la porte puis continuez vers ${toLabel}.`;
+  }
+
+  if (edgeType === "stairs") {
+    return `Prenez l'escalier vers ${toLabel}.`;
+  }
+
+  if (edgeType === "threshold") {
+    return `Franchissez le seuil puis continuez vers ${toLabel}.`;
+  }
+
+  return `Continuez sur ${distance} m vers ${toLabel}.`;
 }
