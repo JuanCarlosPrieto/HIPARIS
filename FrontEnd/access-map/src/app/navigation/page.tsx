@@ -20,6 +20,18 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
+type RoutingEdge = RouteEdge & {
+  edge_type?: "corridor" | "elevator" | "ramp" | "stairs" | "door" | "virtual";
+  synthetic?: boolean;
+};
+
+type RouteStep = {
+  nodeId: string;
+  floorId: string;
+  title: string;
+  instruction: string;
+};
+
 type Organization = {
   id: string;
   owner_id: string;
@@ -88,6 +100,7 @@ type RouteResult = {
   nodeIds: string[];
   edgeIds: string[];
   totalDistance: number;
+  steps: RouteStep[];
 };
 
 const labelByType: Record<ElementType, string> = {
@@ -115,7 +128,7 @@ export default function NavigationPage() {
   const [buildings, setBuildings] = useState<Building[]>([]);
   const [floors, setFloors] = useState<Floor[]>([]);
   const [elements, setElements] = useState<AccessibleElement[]>([]);
-  const [edges, setEdges] = useState<RouteEdge[]>([]);
+  const [edges, setEdges] = useState<RoutingEdge[]>([]);
 
   const [selectedOrganizationId, setSelectedOrganizationId] = useState("");
   const [selectedBuildingId, setSelectedBuildingId] = useState("");
@@ -148,6 +161,21 @@ export default function NavigationPage() {
 
   const routeNodeIds = new Set(routeResult?.nodeIds ?? []);
   const routeEdgeIds = new Set(routeResult?.edgeIds ?? []);
+
+  const visibleElements = elements.filter(
+    (element) => element.floor_id === selectedFloorId
+  );
+
+  const visibleElementIds = new Set(visibleElements.map((element) => element.id));
+
+  const visibleEdges = edges.filter((edge) => {
+    const from = getElementById(edge.from_element_id);
+    const to = getElementById(edge.to_element_id);
+
+    if (!from || !to) return false;
+
+    return from.floor_id === selectedFloorId && to.floor_id === selectedFloorId;
+  });
 
   useEffect(() => {
     loadOrganizations();
@@ -186,15 +214,10 @@ export default function NavigationPage() {
   }, [selectedBuildingId]);
 
   useEffect(() => {
-    setElements([]);
-    setEdges([]);
     setSignedUrl(null);
-    setRouteResult(null);
-    setFromElementId("");
-    setToElementId("");
 
     if (selectedFloorId) {
-      loadFloorData(selectedFloorId);
+      loadSignedUrlForFloor(selectedFloorId);
     }
   }, [selectedFloorId]);
 
@@ -245,6 +268,27 @@ export default function NavigationPage() {
     }
   }
 
+  async function loadSignedUrlForFloor(floorId: string) {
+  const floor = floors.find((item) => item.id === floorId);
+
+  if (!floor?.plan_image_path) {
+    setSignedUrl(null);
+    return;
+  }
+
+  const { data, error } = await supabase.storage
+    .from("plan-images")
+    .createSignedUrl(floor.plan_image_path, 60 * 60);
+
+  if (error) {
+    setErrorMessage(error.message);
+    setSignedUrl(null);
+    return;
+  }
+
+  setSignedUrl(data.signedUrl);
+}
+
   async function loadBuildings(organizationId: string) {
     setErrorMessage(null);
 
@@ -269,6 +313,7 @@ export default function NavigationPage() {
 
   async function loadFloors(buildingId: string) {
     setErrorMessage(null);
+    setLoadingMap(true);
 
     const { data, error } = await supabase
       .from("floors")
@@ -278,16 +323,75 @@ export default function NavigationPage() {
       .order("level", { ascending: true });
 
     if (error) {
+      setLoadingMap(false);
       setErrorMessage(error.message);
       return;
     }
 
     const rows = (data ?? []) as Floor[];
+
     setFloors(rows);
 
-    if (rows.length > 0) {
-      setSelectedFloorId(rows[0].id);
+    if (rows.length === 0) {
+      setSelectedFloorId("");
+      setElements([]);
+      setEdges([]);
+      setSignedUrl(null);
+      setLoadingMap(false);
+      return;
     }
+
+    setSelectedFloorId(rows[0].id);
+
+    await loadBuildingGraph(rows);
+  }
+
+  async function loadBuildingGraph(publishedFloors: Floor[]) {
+    const floorIds = publishedFloors.map((floor) => floor.id);
+
+    if (floorIds.length === 0) {
+      setElements([]);
+      setEdges([]);
+      setLoadingMap(false);
+      return;
+    }
+
+    const [
+      { data: elementsData, error: elementsError },
+      { data: edgesData, error: edgesError },
+    ] = await Promise.all([
+      supabase
+        .from("accessible_elements")
+        .select("*")
+        .in("floor_id", floorIds)
+        .order("created_at", { ascending: true }),
+
+      supabase
+        .from("route_edges")
+        .select("*")
+        .in("floor_id", floorIds)
+        .order("created_at", { ascending: true }),
+    ]);
+
+    setLoadingMap(false);
+
+    if (elementsError) {
+      setErrorMessage(elementsError.message);
+      return;
+    }
+
+    if (edgesError) {
+      setErrorMessage(edgesError.message);
+      return;
+    }
+
+    const loadedElements = (elementsData ?? []) as AccessibleElement[];
+    const loadedEdges = (edgesData ?? []) as RouteEdge[];
+
+    const verticalEdges = buildVirtualVerticalEdges(loadedElements, publishedFloors);
+
+    setElements(loadedElements);
+    setEdges([...loadedEdges, ...verticalEdges]);
   }
 
   async function loadFloorData(floorId: string) {
@@ -362,6 +466,19 @@ export default function NavigationPage() {
     return element.label || labelByType[element.type];
   }
 
+  function getFloorById(floorId: string) {
+    return floors.find((floor) => floor.id === floorId) ?? null;
+  }
+
+  function getElementOptionLabel(element: AccessibleElement) {
+    const floor = getFloorById(element.floor_id);
+    const elementLabel = element.label || labelByType[element.type];
+
+    if (!floor) return elementLabel;
+
+    return `${elementLabel} · ${floor.name} · Niveau ${floor.level}`;
+  }
+
   function handleCalculateRoute() {
     setErrorMessage(null);
     setRouteResult(null);
@@ -379,6 +496,7 @@ export default function NavigationPage() {
     const result = calculateAccessibleRoute({
       elements,
       edges,
+      floors,
       fromElementId,
       toElementId,
       mobilityProfile,
@@ -392,6 +510,12 @@ export default function NavigationPage() {
     }
 
     setRouteResult(result);
+
+    const origin = getElementById(fromElementId);
+
+    if (origin) {
+      setSelectedFloorId(origin.floor_id);
+    }
   }
 
   if (loadingOrganizations) {
@@ -492,7 +616,7 @@ export default function NavigationPage() {
                 onChange={setFromElementId}
                 options={selectableElements.map((element) => ({
                   value: element.id,
-                  label: element.label || labelByType[element.type],
+                  label: getElementOptionLabel(element),
                 }))}
                 emptyLabel="Aucun point disponible"
               />
@@ -597,7 +721,7 @@ export default function NavigationPage() {
                   viewBox="0 0 100 100"
                   preserveAspectRatio="none"
                 >
-                  {edges.map((edge) => {
+                  {visibleEdges.map((edge) => {
                     const from = getElementById(edge.from_element_id);
                     const to = getElementById(edge.to_element_id);
 
@@ -630,7 +754,7 @@ export default function NavigationPage() {
                 </svg>
 
                 <div className="pointer-events-none absolute inset-0">
-                  {elements.map((element, index) => (
+                  {visibleElements.map((element, index) => (
                     <MapMarker
                       key={element.id}
                       element={element}
@@ -664,50 +788,28 @@ export default function NavigationPage() {
                 </div>
 
                 <div className="space-y-3">
-                  {routeResult.nodeIds.map((nodeId, index) => {
-                    const current = getElementById(nodeId);
-                    const nextNodeId = routeResult.nodeIds[index + 1];
-
-                    if (!current) return null;
-
-                    const currentLabel =
-                      current.label || labelByType[current.type];
-
-                    const nextLabel = nextNodeId
-                      ? getElementLabel(nextNodeId)
-                      : null;
+                  {routeResult.steps.map((step, index) => {
+                    const floor = getFloorById(step.floorId);
 
                     return (
                       <div
-                        key={`${nodeId}-${index}`}
-                        className="rounded-2xl border border-white/10 bg-slate-900 p-4"
+                        key={`${step.nodeId}-${index}`}
+                        className="rounded-2xl border border-white/10 bg-white/[0.03] p-4"
                       >
-                        <div className="mb-2 flex items-center gap-2">
-                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-cyan-400 text-xs font-bold text-slate-950">
+                        <div className="flex items-center gap-3">
+                          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-cyan-300 text-sm font-bold text-slate-950">
                             {index + 1}
+                          </span>
+
+                          <div>
+                            <p className="font-semibold text-white">{step.title}</p>
+                            <p className="text-xs text-slate-400">
+                              {floor ? `${floor.name} · Niveau ${floor.level}` : "Étage inconnu"}
+                            </p>
                           </div>
-                          <ElementIcon type={current.type} />
-                          <p className="font-medium">{currentLabel}</p>
                         </div>
 
-                        {index === 0 && (
-                          <p className="text-sm leading-6 text-slate-400">
-                            Départ depuis ce point.
-                          </p>
-                        )}
-
-                        {nextLabel && (
-                          <p className="text-sm leading-6 text-slate-400">
-                            Continuez vers{" "}
-                            <span className="text-slate-200">{nextLabel}</span>.
-                          </p>
-                        )}
-
-                        {!nextLabel && (
-                          <p className="text-sm leading-6 text-slate-400">
-                            Vous êtes arrivé à destination.
-                          </p>
-                        )}
+                        <p className="mt-3 text-sm text-slate-300">{step.instruction}</p>
                       </div>
                     );
                   })}
@@ -750,15 +852,87 @@ export default function NavigationPage() {
   );
 }
 
+function normalizeVerticalLabel(label: string | null) {
+  return (label ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function buildVirtualVerticalEdges(
+  elements: AccessibleElement[],
+  floors: Floor[]
+): RoutingEdge[] {
+  const floorById = new Map(floors.map((floor) => [floor.id, floor]));
+
+  const elevators = elements.filter(
+    (element) => element.type === "elevator" && element.label
+  );
+
+  const groups = new Map<string, AccessibleElement[]>();
+
+  for (const elevator of elevators) {
+    const key = normalizeVerticalLabel(elevator.label);
+
+    if (!key) continue;
+
+    const group = groups.get(key) ?? [];
+    group.push(elevator);
+    groups.set(key, group);
+  }
+
+  const virtualEdges: RoutingEdge[] = [];
+
+  for (const group of groups.values()) {
+    const sorted = [...group].sort((a, b) => {
+      const floorA = floorById.get(a.floor_id);
+      const floorB = floorById.get(b.floor_id);
+
+      return (floorA?.level ?? 0) - (floorB?.level ?? 0);
+    });
+
+    for (let index = 0; index < sorted.length - 1; index++) {
+      const from = sorted[index];
+      const to = sorted[index + 1];
+
+      const fromFloor = floorById.get(from.floor_id);
+      const toFloor = floorById.get(to.floor_id);
+
+      const levelDelta = Math.abs((toFloor?.level ?? 0) - (fromFloor?.level ?? 0));
+
+      virtualEdges.push({
+        id: `virtual-elevator-${from.id}-${to.id}`,
+        floor_id: from.floor_id,
+        from_element_id: from.id,
+        to_element_id: to.id,
+        distance_meters: Math.max(5, levelDelta * 6),
+        wheelchair_accessible: true,
+        crutches_accessible: true,
+        is_bidirectional: true,
+        notes: "Connexion verticale virtuelle entre étages",
+        created_at: new Date().toISOString(),
+        edge_type: "elevator",
+        synthetic: true,
+      });
+    }
+  }
+
+  return virtualEdges;
+}
+
 function calculateAccessibleRoute({
   elements,
   edges,
+  floors,
   fromElementId,
   toElementId,
   mobilityProfile,
 }: {
   elements: AccessibleElement[];
-  edges: RouteEdge[];
+  edges: RoutingEdge[];
+  floors: Floor[];
   fromElementId: string;
   toElementId: string;
   mobilityProfile: MobilityProfile;
@@ -772,6 +946,7 @@ function calculateAccessibleRoute({
     string,
     { to: string; distance: number; edgeId: string }[]
   >();
+
 
   for (const id of elementIds) {
     distances.set(id, Number.POSITIVE_INFINITY);
@@ -859,11 +1034,87 @@ function calculateAccessibleRoute({
     nodeIds.unshift(currentId);
   }
 
+  const steps = buildRouteSteps({
+    nodeIds,
+    elements,
+    edges,
+    floors,
+  });
+
   return {
     nodeIds,
     edgeIds,
     totalDistance: finalDistance,
+    steps,
   };
+}
+
+function buildRouteSteps({
+  nodeIds,
+  elements,
+  edges,
+  floors,
+}: {
+  nodeIds: string[];
+  elements: AccessibleElement[];
+  edges: RoutingEdge[];
+  floors: Floor[];
+}): RouteStep[] {
+  const elementById = new Map(elements.map((element) => [element.id, element]));
+  const floorById = new Map(floors.map((floor) => [floor.id, floor]));
+
+  const steps: RouteStep[] = [];
+
+  for (let index = 0; index < nodeIds.length; index++) {
+    const current = elementById.get(nodeIds[index]);
+    const next = elementById.get(nodeIds[index + 1]);
+
+    if (!current) continue;
+
+    const currentFloor = floorById.get(current.floor_id);
+    const currentLabel = current.label || labelByType[current.type];
+
+    if (index === 0) {
+      steps.push({
+        nodeId: current.id,
+        floorId: current.floor_id,
+        title: currentLabel,
+        instruction: `Départ depuis ${currentLabel}, ${currentFloor?.name ?? "étage inconnu"}.`,
+      });
+      continue;
+    }
+
+    if (!next) {
+      steps.push({
+        nodeId: current.id,
+        floorId: current.floor_id,
+        title: currentLabel,
+        instruction: `Vous êtes arrivé à ${currentLabel}.`,
+      });
+      continue;
+    }
+
+    const nextFloor = floorById.get(next.floor_id);
+    const nextLabel = next.label || labelByType[next.type];
+
+    if (current.floor_id !== next.floor_id) {
+      steps.push({
+        nodeId: current.id,
+        floorId: current.floor_id,
+        title: currentLabel,
+        instruction: `Prenez ${currentLabel} pour aller vers ${nextFloor?.name ?? "l'étage suivant"}, niveau ${nextFloor?.level ?? "?"}.`,
+      });
+    } else {
+      steps.push({
+        nodeId: current.id,
+        floorId: current.floor_id,
+        title: currentLabel,
+        instruction: `Continuez vers ${nextLabel}.`,
+      });
+    }
+  }
+
+  return steps;
 }
 
 function isEdgeAllowed(edge: RouteEdge, mobilityProfile: MobilityProfile) {
