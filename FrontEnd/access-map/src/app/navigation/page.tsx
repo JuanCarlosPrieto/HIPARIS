@@ -21,7 +21,6 @@ import {
 import { createClient } from "@/lib/supabase/client";
 
 type RoutingEdge = RouteEdge & {
-  edge_type?: "corridor" | "elevator" | "ramp" | "stairs" | "door" | "virtual";
   synthetic?: boolean;
 };
 
@@ -124,11 +123,15 @@ type RouteEdge = {
   step_height_cm: number | null;
   surface_type: SurfaceType | null;
   door_type: DoorType | null;
-  assistance_required: boolean | null;
+  assistance_required: boolean;
   accessibility_notes: string | null;
 };
 
-type MobilityProfile = "wheelchair" | "crutches" | "reduced_mobility";
+type MobilityProfile =
+  | "wheelchair"
+  | "crutches"
+  | "walker"
+  | "reduced_mobility";
 
 type RouteResult = {
   nodeIds: string[];
@@ -152,6 +155,7 @@ const labelByType: Record<ElementType, string> = {
 const mobilityLabels: Record<MobilityProfile, string> = {
   wheelchair: "Fauteuil roulant",
   crutches: "Béquilles",
+  walker: "Déambulateur",
   reduced_mobility: "Mobilité réduite",
 };
 
@@ -679,6 +683,7 @@ export default function NavigationPage() {
                   }
                   className="w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm outline-none focus:border-cyan-300"
                 >
+                  <option value="walker">Déambulateur</option>
                   <option value="wheelchair">Fauteuil roulant</option>
                   <option value="crutches">Béquilles</option>
                   <option value="reduced_mobility">Mobilité réduite</option>
@@ -762,6 +767,7 @@ export default function NavigationPage() {
 
                     if (!from || !to) return null;
 
+                    const isAllowed = isEdgeAllowed(edge, mobilityProfile);
                     const isInRoute = routeEdgeIds.has(edge.id);
 
                     return (
@@ -774,15 +780,13 @@ export default function NavigationPage() {
                         stroke={
                           isInRoute
                             ? "#22d3ee"
-                            : edge.wheelchair_accessible
-                              ? "rgba(148,163,184,0.45)"
-                              : "rgba(248,113,113,0.45)"
+                            : isAllowed
+                              ? "#64748b"
+                              : "#f87171"
                         }
-                        strokeWidth={isInRoute ? "1.3" : "0.45"}
+                        strokeWidth={isInRoute ? "1.2" : "0.7"}
                         strokeLinecap="round"
-                        strokeDasharray={
-                          edge.wheelchair_accessible ? "0" : "2 1.5"
-                        }
+                        strokeDasharray={isAllowed ? "0" : "2 1.4"}
                       />
                     );
                   })}
@@ -948,7 +952,15 @@ function buildVirtualVerticalEdges(
         is_bidirectional: true,
         notes: "Connexion verticale virtuelle entre étages",
         created_at: new Date().toISOString(),
+
         edge_type: "elevator",
+        slope_percent: null,
+        width_cm: null,
+        step_height_cm: null,
+        surface_type: "normal",
+        door_type: null,
+        assistance_required: false,
+        accessibility_notes: "Connexion générée automatiquement entre ascenseurs de même nom.",
         synthetic: true,
       });
     }
@@ -1007,14 +1019,6 @@ function calculateAccessibleRoute({
       adjacency.get(edge.to_element_id)?.push({
         to: edge.from_element_id,
         distance: cost,
-        edgeId: edge.id,
-      });
-    }
-
-    if (edge.is_bidirectional) {
-      adjacency.get(edge.to_element_id)?.push({
-        to: edge.from_element_id,
-        distance: edge.distance_meters,
         edgeId: edge.id,
       });
     }
@@ -1175,6 +1179,15 @@ function isEdgeAllowed(edge: RouteEdge, mobilityProfile: MobilityProfile) {
   const width = edge.width_cm ?? null;
   const stepHeight = edge.step_height_cm ?? 0;
 
+  if (mobilityProfile === "walker") {
+    if (!edge.wheelchair_accessible && !edge.crutches_accessible) return false;
+    if (edgeType === "stairs") return false;
+    if (stepHeight > 2) return false;
+    if (edgeType === "ramp" && slope > 8) return false;
+    if (width !== null && width < 75) return false;
+    return true;
+  }
+
   if (mobilityProfile === "wheelchair") {
     if (!edge.wheelchair_accessible) return false;
 
@@ -1218,12 +1231,17 @@ function getTypePenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
   const edgeType = edge.edge_type ?? "corridor";
 
   if (edgeType === "corridor") return 0;
-  if (edgeType === "elevator") return mobilityProfile === "wheelchair" ? 3 : 8;
+  if (edgeType === "elevator") {
+    if (mobilityProfile === "wheelchair") return 3;
+    if (mobilityProfile === "walker") return 4;
+    return 8;
+  }
   if (edgeType === "door") return mobilityProfile === "wheelchair" ? 8 : 5;
   if (edgeType === "threshold") return mobilityProfile === "wheelchair" ? 20 : 8;
   if (edgeType === "ramp") return mobilityProfile === "wheelchair" ? 8 : 10;
   if (edgeType === "stairs") {
     if (mobilityProfile === "wheelchair") return 10_000;
+    if (mobilityProfile === "walker") return 10_000;
     if (mobilityProfile === "crutches") return 45;
     return 35;
   }
@@ -1235,6 +1253,12 @@ function getSlopePenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
   const slope = edge.slope_percent ?? 0;
 
   if (slope <= 0) return 0;
+
+  if (mobilityProfile === "walker") {
+    if (slope <= 5) return slope * 1.5;
+    if (slope <= 8) return 20 + slope * 4;
+    return 10_000;
+  }
 
   if (mobilityProfile === "wheelchair") {
     if (slope <= 5) return slope * 1.5;
@@ -1264,6 +1288,13 @@ function getWidthPenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
     return 5;
   }
 
+  if (mobilityProfile === "walker") {
+    if (width >= 120) return 0;
+    if (width >= 90) return 10;
+    if (width >= 75) return 45;
+    return 10_000;
+  }
+
   if (mobilityProfile === "wheelchair") {
     if (width >= 140) return 0;
     if (width >= 120) return 10;
@@ -1289,6 +1320,11 @@ function getStepPenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
 
   if (stepHeight <= 0) return 0;
 
+  if (mobilityProfile === "walker") {
+    if (stepHeight <= 2) return 10;
+    return 10_000;
+  }
+
   if (mobilityProfile === "wheelchair") {
     if (stepHeight <= 2) return 15;
     return 10_000;
@@ -1310,6 +1346,13 @@ function getSurfacePenalty(edge: RouteEdge, mobilityProfile: MobilityProfile) {
 
   if (surface === "normal") return 0;
   if (surface === "unknown") return 5;
+
+  if (mobilityProfile === "walker") {
+    if (surface === "carpet") return 15;
+    if (surface === "irregular") return 45;
+    if (surface === "gravel") return 70;
+    if (surface === "slippery") return 55;
+  }
 
   if (mobilityProfile === "wheelchair") {
     if (surface === "carpet") return 20;
@@ -1503,6 +1546,7 @@ function getEdgeCost(
 
   if (edge.assistance_required) {
     if (mobilityProfile === "wheelchair") penalty += 80;
+    if (mobilityProfile === "walker") penalty += 60;
     if (mobilityProfile === "crutches") penalty += 45;
     if (mobilityProfile === "reduced_mobility") penalty += 35;
   }
