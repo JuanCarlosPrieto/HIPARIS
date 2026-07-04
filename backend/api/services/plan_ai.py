@@ -79,8 +79,46 @@ def _clamp_float(value: Any, default: float = 0.0) -> float:
 
     return max(0.0, min(1.0, number))
 
+def _normalize_bounds(value: Any) -> dict[str, float] | None:
+    if not isinstance(value, dict):
+        return None
+
+    x = _clamp_float(value.get("x"), default=0.0)
+    y = _clamp_float(value.get("y"), default=0.0)
+    width = _clamp_float(value.get("width"), default=1.0)
+    height = _clamp_float(value.get("height"), default=1.0)
+
+    if width <= 0.05 or height <= 0.05:
+        return None
+
+    width = min(width, 1.0 - x)
+    height = min(height, 1.0 - y)
+
+    if width <= 0.05 or height <= 0.05:
+        return None
+
+    return {
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+    }
+
+
+def _inside_bounds(
+    x: float,
+    y: float,
+    bounds: dict[str, float],
+    margin: float = 0.015,
+) -> bool:
+    return (
+        bounds["x"] - margin <= x <= bounds["x"] + bounds["width"] + margin
+        and bounds["y"] - margin <= y <= bounds["y"] + bounds["height"] + margin
+    )
 
 def _normalize_graph(data: dict[str, Any]) -> dict[str, Any]:
+    floor_plan_bounds = _normalize_bounds(data.get("floor_plan_bounds"))
+
     elements_in = data.get("elements", [])
     edges_in = data.get("edges", [])
     warnings_in = data.get("warnings", [])
@@ -102,17 +140,26 @@ def _normalize_graph(data: dict[str, Any]) -> dict[str, Any]:
             continue
 
         temp_id = str(item.get("temp_id") or f"e_{index + 1}")
-        element_type = str(item.get("type") or "unknown")
 
+        element_type = str(item.get("type") or "unknown")
         if element_type not in ALLOWED_ELEMENT_TYPES:
             element_type = "unknown"
+
+        x = _clamp_float(item.get("x"))
+        y = _clamp_float(item.get("y"))
+
+        if floor_plan_bounds and not _inside_bounds(x, y, floor_plan_bounds):
+            warnings_in.append(
+                f"Element {temp_id} ignored because it is outside the detected floor plan bounds."
+            )
+            continue
 
         element = {
             "temp_id": temp_id,
             "type": element_type,
             "name": str(item.get("name") or ""),
-            "x": _clamp_float(item.get("x")),
-            "y": _clamp_float(item.get("y")),
+            "x": x,
+            "y": y,
             "confidence": _clamp_float(item.get("confidence"), default=0.5),
             "notes": str(item.get("notes") or ""),
         }
@@ -133,7 +180,6 @@ def _normalize_graph(data: dict[str, Any]) -> dict[str, Any]:
             continue
 
         edge_type = str(item.get("edge_type") or "unknown")
-
         if edge_type not in ALLOWED_EDGE_TYPES:
             edge_type = "unknown"
 
@@ -152,6 +198,7 @@ def _normalize_graph(data: dict[str, Any]) -> dict[str, Any]:
     warnings = [str(w) for w in warnings_in if str(w).strip()]
 
     return {
+        "floor_plan_bounds": floor_plan_bounds,
         "elements": elements,
         "edges": edges,
         "warnings": warnings,
@@ -236,7 +283,21 @@ You are helping build an indoor accessibility navigation graph from a building f
 
 Return ONLY valid JSON. No markdown. No explanation outside JSON.
 
-The image is a floor plan. Detect useful navigation elements:
+The image is a floor plan, but it may contain margins, legends, titles, empty whitespace, stamps, logos, annotations, or non-architectural areas.
+
+First detect the useful architectural floor plan area.
+Return it as "floor_plan_bounds".
+
+"floor_plan_bounds" must be a normalized rectangle:
+- x between 0 and 1 from left to right
+- y between 0 and 1 from top to bottom
+- width between 0 and 1
+- height between 0 and 1
+
+All elements must be inside "floor_plan_bounds".
+Do not place elements in page margins, legends, title blocks, logos, blank regions, or outside the architectural drawing.
+
+Detect useful navigation elements:
 - entrances
 - rooms
 - corridors
@@ -248,7 +309,7 @@ The image is a floor plan. Detect useful navigation elements:
 - accessible toilets
 - obstacles, if visible
 
-Use normalized coordinates:
+Use normalized coordinates relative to the full image you receive:
 - x between 0 and 1 from left to right
 - y between 0 and 1 from top to bottom
 
@@ -261,8 +322,13 @@ Context:
 - real_height_meters: {real_height_meters if real_height_meters is not None else "unknown"}
 
 Return this exact JSON shape:
-
 {{
+  "floor_plan_bounds": {{
+    "x": 0.05,
+    "y": 0.08,
+    "width": 0.90,
+    "height": 0.84
+  }},
   "elements": [
     {{
       "temp_id": "e_1",
