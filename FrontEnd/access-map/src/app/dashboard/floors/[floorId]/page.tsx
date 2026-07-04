@@ -71,6 +71,31 @@ type AccessibleElement = {
   created_at: string;
 };
 
+type EdgeType =
+  | "corridor"
+  | "door"
+  | "ramp"
+  | "elevator"
+  | "stairs"
+  | "threshold"
+  | "manual";
+
+type SurfaceType =
+  | "normal"
+  | "slippery"
+  | "carpet"
+  | "irregular"
+  | "gravel"
+  | "unknown";
+
+type DoorType =
+  | "automatic"
+  | "manual_light"
+  | "manual_heavy"
+  | "push"
+  | "pull"
+  | "unknown";
+
 type RouteEdge = {
   id: string;
   floor_id: string;
@@ -82,6 +107,15 @@ type RouteEdge = {
   is_bidirectional: boolean;
   notes: string | null;
   created_at: string;
+
+  edge_type: EdgeType;
+  slope_percent: number | null;
+  width_cm: number | null;
+  step_height_cm: number | null;
+  surface_type: SurfaceType | null;
+  door_type: DoorType | null;
+  assistance_required: boolean;
+  accessibility_notes: string | null;
 };
 
 const ELEMENT_TYPES: {
@@ -165,6 +199,15 @@ export default function FloorReviewPage() {
   const [crutchesAccessible, setCrutchesAccessible] = useState(true);
   const [isBidirectional, setIsBidirectional] = useState(true);
   const [edgeNotes, setEdgeNotes] = useState("");
+
+  const [edgeType, setEdgeType] = useState<EdgeType>("corridor");
+  const [slopePercent, setSlopePercent] = useState("");
+  const [widthCm, setWidthCm] = useState("");
+  const [stepHeightCm, setStepHeightCm] = useState("");
+  const [surfaceType, setSurfaceType] = useState<SurfaceType>("normal");
+  const [doorType, setDoorType] = useState<DoorType>("unknown");
+  const [assistanceRequired, setAssistanceRequired] = useState(false);
+  const [accessibilityNotes, setAccessibilityNotes] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [savingElement, setSavingElement] = useState(false);
@@ -310,6 +353,52 @@ export default function FloorReviewPage() {
     return element.label || labelByType[element.type];
   }
 
+  function handleEdgeTypeChange(nextType: EdgeType) {
+    setEdgeType(nextType);
+
+    if (nextType === "stairs") {
+      setWheelchairAccessible(false);
+      setCrutchesAccessible(true);
+      setSurfaceType("normal");
+      setDoorType("unknown");
+    }
+
+    if (nextType === "elevator") {
+      setWheelchairAccessible(true);
+      setCrutchesAccessible(true);
+      setSlopePercent("");
+      setStepHeightCm("");
+      setSurfaceType("normal");
+      setDoorType("unknown");
+    }
+
+    if (nextType === "ramp") {
+      setWheelchairAccessible(true);
+      setCrutchesAccessible(true);
+      setStepHeightCm("");
+      setDoorType("unknown");
+    }
+
+    if (nextType === "door") {
+      setWheelchairAccessible(true);
+      setCrutchesAccessible(true);
+      setSlopePercent("");
+      setStepHeightCm("");
+    }
+
+    if (nextType === "threshold") {
+      setWheelchairAccessible(false);
+      setCrutchesAccessible(true);
+      setDoorType("unknown");
+    }
+
+    if (nextType === "corridor") {
+      setWheelchairAccessible(true);
+      setCrutchesAccessible(true);
+      setDoorType("unknown");
+    }
+  }
+
   function getElementById(elementId: string) {
     return elements.find((element) => element.id === elementId) ?? null;
   }
@@ -437,6 +526,12 @@ export default function FloorReviewPage() {
       return;
     }
 
+    const slopeValue = slopePercent.trim() ? Number.parseFloat(slopePercent) : null;
+    const widthValue = widthCm.trim() ? Number.parseFloat(widthCm) : null;
+    const stepHeightValue = stepHeightCm.trim()
+      ? Number.parseFloat(stepHeightCm)
+      : null;
+
     const { data, error } = await supabase
       .from("route_edges")
       .insert({
@@ -444,9 +539,20 @@ export default function FloorReviewPage() {
         from_element_id: fromElementId,
         to_element_id: toElementId,
         distance_meters: distance,
+
         wheelchair_accessible: wheelchairAccessible,
         crutches_accessible: crutchesAccessible,
         is_bidirectional: isBidirectional,
+
+        edge_type: edgeType,
+        slope_percent: slopeValue,
+        width_cm: widthValue,
+        step_height_cm: stepHeightValue,
+        surface_type: surfaceType,
+        door_type: edgeType === "door" ? doorType : null,
+        assistance_required: assistanceRequired,
+        accessibility_notes: accessibilityNotes.trim() || null,
+
         notes: edgeNotes.trim() || null,
       })
       .select("*")
@@ -459,8 +565,19 @@ export default function FloorReviewPage() {
       return;
     }
 
-    setEdges((current) => [...current, data as RouteEdge]);
     setEdgeNotes("");
+    setAccessibilityNotes("");
+    setSlopePercent("");
+    setWidthCm("");
+    setStepHeightCm("");
+    setSurfaceType("normal");
+    setDoorType("unknown");
+    setAssistanceRequired(false);
+    setEdgeType("corridor");
+    setWheelchairAccessible(true);
+    setCrutchesAccessible(true);
+    setIsBidirectional(true);
+    setEdges((current) => [...current, data as RouteEdge]);
     setInfoMessage("Connexion ajoutée au graphe.");
   }
 
@@ -892,6 +1009,64 @@ export default function FloorReviewPage() {
                         Sens :{" "}
                         <span className="text-slate-200">
                           {edge.is_bidirectional ? "bidirectionnel" : "sens unique"}
+                        </span>
+                      </p>
+                      <p>
+                        Type :{" "}
+                        <span className="text-slate-200">
+                          {edge.edge_type}
+                        </span>
+                      </p>
+
+                      {edge.width_cm !== null && edge.width_cm !== undefined && (
+                        <p>
+                          Largeur :{" "}
+                          <span className="text-slate-200">
+                            {edge.width_cm} cm
+                          </span>
+                        </p>
+                      )}
+
+                      {edge.slope_percent !== null && edge.slope_percent !== undefined && (
+                        <p>
+                          Pente :{" "}
+                          <span className="text-slate-200">
+                            {edge.slope_percent} %
+                          </span>
+                        </p>
+                      )}
+
+                      {edge.step_height_cm !== null && edge.step_height_cm !== undefined && (
+                        <p>
+                          Hauteur marche :{" "}
+                          <span className="text-slate-200">
+                            {edge.step_height_cm} cm
+                          </span>
+                        </p>
+                      )}
+
+                      {edge.surface_type && (
+                        <p>
+                          Surface :{" "}
+                          <span className="text-slate-200">
+                            {edge.surface_type}
+                          </span>
+                        </p>
+                      )}
+
+                      {edge.door_type && (
+                        <p>
+                          Porte :{" "}
+                          <span className="text-slate-200">
+                            {edge.door_type}
+                          </span>
+                        </p>
+                      )}
+
+                      <p>
+                        Assistance :{" "}
+                        <span className="text-slate-200">
+                          {edge.assistance_required ? "oui" : "non"}
                         </span>
                       </p>
                     </div>
