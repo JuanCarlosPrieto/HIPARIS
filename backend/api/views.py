@@ -2,9 +2,14 @@ from rest_framework import status
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
+import logging
+
+from django.conf import settings
 
 from .services.plan_ai import PlanAIError, analyze_plan_image
 
+
+logger = logging.getLogger(__name__)
 
 MAX_IMAGE_SIZE_BYTES = 8 * 1024 * 1024
 
@@ -85,15 +90,16 @@ class AnalyzePlanView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        except Exception:
+        except Exception as exc:
+            logger.exception("Unexpected error while analyzing the plan.")
+
             return Response(
                 {
                     "status": "error",
-                    "error": "Unexpected error while analyzing the plan.",
+                    "error": str(exc) if settings.DEBUG else "Unexpected error while analyzing the plan.",
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-
         return Response(
             {
                 "status": "ok",

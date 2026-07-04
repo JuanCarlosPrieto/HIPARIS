@@ -4,7 +4,8 @@ import os
 import re
 from typing import Any
 
-import anthropic
+from google import genai
+from google.genai import types
 
 
 ALLOWED_ELEMENT_TYPES = {
@@ -36,24 +37,14 @@ class PlanAIError(Exception):
     pass
 
 
-def _get_client() -> anthropic.Anthropic:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+def _get_client() -> genai.Client:
+    api_key = os.getenv("GEMINI_API_KEY")
 
     if not api_key:
-        raise PlanAIError("ANTHROPIC_API_KEY is missing.")
+        raise PlanAIError("GEMINI_API_KEY is missing.")
 
-    return anthropic.Anthropic(api_key=api_key)
+    return genai.Client(api_key=api_key)
 
-
-def _extract_text_from_response(response: Any) -> str:
-    parts: list[str] = []
-
-    for block in getattr(response, "content", []):
-        text = getattr(block, "text", None)
-        if text:
-            parts.append(text)
-
-    return "\n".join(parts).strip()
 
 
 def _extract_json_object(raw_text: str) -> dict[str, Any]:
@@ -175,16 +166,70 @@ def analyze_plan_image(
     real_width_meters: float | None = None,
     real_height_meters: float | None = None,
 ) -> dict[str, Any]:
+    if os.getenv("USE_AI_MOCK", "False") == "True":
+        return {
+            "elements": [
+                {
+                    "temp_id": "e_1",
+                    "type": "entrance",
+                    "name": "Entrée principale",
+                    "x": 0.15,
+                    "y": 0.75,
+                    "confidence": 0.95,
+                    "notes": "Point de démonstration généré en mode mock.",
+                },
+                {
+                    "temp_id": "e_2",
+                    "type": "elevator",
+                    "name": "Ascenseur",
+                    "x": 0.55,
+                    "y": 0.45,
+                    "confidence": 0.9,
+                    "notes": "Point de démonstration généré en mode mock.",
+                },
+                {
+                    "temp_id": "e_3",
+                    "type": "room",
+                    "name": "Salle cible",
+                    "x": 0.82,
+                    "y": 0.25,
+                    "confidence": 0.85,
+                    "notes": "Point de démonstration généré en mode mock.",
+                },
+            ],
+            "edges": [
+                {
+                    "from_temp_id": "e_1",
+                    "to_temp_id": "e_2",
+                    "edge_type": "corridor",
+                    "confidence": 0.9,
+                    "wheelchair_accessible": True,
+                    "crutches_accessible": True,
+                    "notes": "Connexion de démonstration.",
+                },
+                {
+                    "from_temp_id": "e_2",
+                    "to_temp_id": "e_3",
+                    "edge_type": "corridor",
+                    "confidence": 0.85,
+                    "wheelchair_accessible": True,
+                    "crutches_accessible": True,
+                    "notes": "Connexion de démonstration.",
+                },
+            ],
+            "warnings": [
+                "Mode mock activé : aucune vraie analyse IA n'a été effectuée."
+            ],
+        }
+
     if not image_bytes:
         raise PlanAIError("Image is empty.")
 
     if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
         raise PlanAIError(f"Unsupported image type: {mime_type}")
 
-    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     client = _get_client()
-
-    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
 
     prompt = f"""
 You are helping build an indoor accessibility navigation graph from a building floor plan.
@@ -252,32 +297,22 @@ Important:
 - If accessibility is not visually inferable, use null for wheelchair_accessible or crutches_accessible.
 """
 
-    response = client.messages.create(
+    response = client.models.generate_content(
         model=model,
-        max_tokens=4096,
-        temperature=0,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": mime_type,
-                            "data": image_base64,
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": prompt,
-                    },
-                ],
-            }
+        contents=[
+            types.Part.from_bytes(
+                data=image_bytes,
+                mime_type=mime_type,
+            ),
+            prompt,
         ],
+        config=types.GenerateContentConfig(
+            temperature=0,
+            response_mime_type="application/json",
+        ),
     )
 
-    raw_text = _extract_text_from_response(response)
+    raw_text = response.text or ""
     raw_data = _extract_json_object(raw_text)
 
     return _normalize_graph(raw_data)

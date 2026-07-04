@@ -3,6 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
+  analyzePlanWithAI,
+  type AIElementProposal,
+  type AIEdgeProposal,
+  type AIPlanProposal,
+} from "@/lib/ai/analyzePlanWithAI";
+
+import {
   Accessibility,
   ArrowLeft,
   CheckCircle2,
@@ -191,6 +198,10 @@ export default function FloorReviewPage() {
 
   const [selectedType, setSelectedType] = useState<ElementType>("entrance");
   const [label, setLabel] = useState("");
+
+  const [aiProposal, setAiProposal] = useState<AIPlanProposal | null>(null);
+  const [analyzingPlan, setAnalyzingPlan] = useState(false);
+  const [savingAIProposal, setSavingAIProposal] = useState(false);
 
   const [fromElementId, setFromElementId] = useState("");
   const [toElementId, setToElementId] = useState("");
@@ -626,6 +637,171 @@ export default function FloorReviewPage() {
     setInfoMessage("Étage publié.");
   }
 
+  async function handleAnalyzePlanWithAI() {
+    if (!floor) return;
+
+    if (!signedUrl) {
+      setErrorMessage("Aucune image disponible pour cet étage.");
+      return;
+    }
+
+    setAnalyzingPlan(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+
+    try {
+      const imageResponse = await fetch(signedUrl);
+
+      if (!imageResponse.ok) {
+        throw new Error("Impossible de lire l'image du plan.");
+      }
+
+      const imageBlob = await imageResponse.blob();
+
+      const proposal = await analyzePlanWithAI({
+        image: imageBlob,
+        floorId: floor.id,
+        realWidthMeters: floor.real_width_meters,
+        realHeightMeters: floor.real_height_meters,
+      });
+
+      setAiProposal(proposal);
+
+      setInfoMessage(
+        `Analyse IA terminée : ${proposal.elements.length} points et ${proposal.edges.length} connexions proposés.`
+      );
+    } catch (error) {
+      console.error("Erreur analyse IA:", error);
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setAnalyzingPlan(false);
+    }
+  }
+
+  async function handleSaveAIProposal() {
+    if (!floor || !aiProposal) return;
+
+    if (aiProposal.elements.length === 0) {
+      setErrorMessage("La proposition IA ne contient aucun point à sauvegarder.");
+      return;
+    }
+
+    setSavingAIProposal(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+
+    try {
+      const elementRows = aiProposal.elements.map((element) => ({
+        floor_id: floor.id,
+        type: mapAIElementTypeToElementType(element.type),
+        label: getAIElementLabel(element),
+        x: clamp01(element.x),
+        y: clamp01(element.y),
+        metadata: {
+          source: "ai",
+          ai_temp_id: element.temp_id,
+          ai_original_type: element.type,
+          ai_confidence: element.confidence,
+          ai_notes: element.notes,
+          validation_status: "needs_human_review",
+        },
+      }));
+
+      const { data: insertedElements, error: elementsError } = await supabase
+        .from("accessible_elements")
+        .insert(elementRows)
+        .select("*");
+
+      if (elementsError) {
+        throw elementsError;
+      }
+
+      const savedElements = (insertedElements ?? []) as AccessibleElement[];
+
+      const savedByTempId = new Map<string, AccessibleElement>();
+
+      for (const element of savedElements) {
+        const metadata = element.metadata as Record<string, unknown> | null;
+        const tempId = metadata?.ai_temp_id;
+
+        if (typeof tempId === "string") {
+          savedByTempId.set(tempId, element);
+        }
+      }
+
+      const edgeRows = aiProposal.edges
+        .map((edge) => {
+          const from = savedByTempId.get(edge.from_temp_id);
+          const to = savedByTempId.get(edge.to_temp_id);
+
+          if (!from || !to) {
+            return null;
+          }
+
+          const edgeType = mapAIEdgeTypeToEdgeType(edge.edge_type);
+          const distance = estimateDistanceFromCoordinates({
+            floor,
+            fromX: from.x,
+            fromY: from.y,
+            toX: to.x,
+            toY: to.y,
+          });
+
+          return {
+            floor_id: floor.id,
+            from_element_id: from.id,
+            to_element_id: to.id,
+            distance_meters: distance,
+            wheelchair_accessible:
+              edge.wheelchair_accessible ?? edgeType !== "stairs",
+            crutches_accessible: edge.crutches_accessible ?? true,
+            is_bidirectional: true,
+            edge_type: edgeType,
+            slope_percent: null,
+            width_cm: null,
+            step_height_cm: null,
+            surface_type: "unknown",
+            door_type: edgeType === "door" ? "unknown" : null,
+            assistance_required: false,
+            notes: edge.notes || "Connexion proposée par IA.",
+            accessibility_notes:
+              edge.confidence < 0.6
+                ? "Faible confiance IA : à vérifier manuellement."
+                : null,
+          };
+        })
+        .filter((edge): edge is NonNullable<typeof edge> => edge !== null);
+
+      if (edgeRows.length > 0) {
+        const { data: insertedEdges, error: edgesError } = await supabase
+          .from("route_edges")
+          .insert(edgeRows)
+          .select("*");
+
+        if (edgesError) {
+          throw edgesError;
+        }
+
+        setEdges((current) => [
+          ...current,
+          ...((insertedEdges ?? []) as RouteEdge[]),
+        ]);
+      }
+
+      setElements((current) => [...current, ...savedElements]);
+      setAiProposal(null);
+
+      setInfoMessage(
+        `Proposition IA sauvegardée : ${savedElements.length} points et ${edgeRows.length} connexions ajoutés. Vérifiez avant publication.`
+      );
+    } catch (error) {
+      console.error("Erreur sauvegarde proposition IA:", error);
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setSavingAIProposal(false);
+    }
+  }
+
   if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-950 text-white">
@@ -819,7 +995,7 @@ export default function FloorReviewPage() {
         </aside>
 
         <section className="rounded-3xl border border-white/10 bg-white/[0.04] p-5">
-          <div className="mb-5 flex items-center justify-between gap-4">
+          <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 className="text-2xl font-semibold">Plan interactif</h2>
               <p className="mt-1 text-sm text-slate-400">
@@ -827,7 +1003,23 @@ export default function FloorReviewPage() {
               </p>
             </div>
 
-            <StatusBadge status={floor.status} />
+            <div className="flex flex-wrap items-center gap-3">
+              <StatusBadge status={floor.status} />
+
+              <button
+                type="button"
+                onClick={handleAnalyzePlanWithAI}
+                disabled={analyzingPlan || !signedUrl}
+                className="flex items-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-400/10 px-4 py-2 text-sm font-medium text-cyan-100 hover:bg-cyan-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {analyzingPlan ? (
+                  <Loader2 className="animate-spin" size={16} />
+                ) : (
+                  <Accessibility size={16} />
+                )}
+                {analyzingPlan ? "Analyse IA..." : "Analyser avec IA"}
+              </button>
+            </div>
           </div>
 
           {errorMessage && (
@@ -889,12 +1081,46 @@ export default function FloorReviewPage() {
                       />
                     );
                   })}
+
+                  {aiProposal?.edges.map((edge, index) => {
+                    const from = aiProposal.elements.find(
+                      (element) => element.temp_id === edge.from_temp_id
+                    );
+                    const to = aiProposal.elements.find(
+                      (element) => element.temp_id === edge.to_temp_id
+                    );
+
+                    if (!from || !to) return null;
+
+                    return (
+                      <line
+                        key={`ai-edge-${index}`}
+                        x1={clamp01(from.x) * 100}
+                        y1={clamp01(from.y) * 100}
+                        x2={clamp01(to.x) * 100}
+                        y2={clamp01(to.y) * 100}
+                        stroke="#facc15"
+                        strokeWidth="0.6"
+                        strokeLinecap="round"
+                        strokeDasharray="2 1.5"
+                        opacity="0.9"
+                      />
+                    );
+                  })}
                 </svg>
 
                 <div className="pointer-events-none absolute inset-0">
                   {elements.map((element, index) => (
                     <MapMarker
                       key={element.id}
+                      element={element}
+                      index={index + 1}
+                    />
+                  ))}
+
+                  {aiProposal?.elements.map((element, index) => (
+                    <AIMapMarker
+                      key={element.temp_id}
                       element={element}
                       index={index + 1}
                     />
@@ -913,6 +1139,76 @@ export default function FloorReviewPage() {
         </section>
 
         <aside className="space-y-6">
+          {aiProposal && (
+          <Panel
+            title="Proposition IA"
+            subtitle="Ces points et connexions doivent être vérifiés avant publication."
+          >
+            <div className="space-y-4">
+              {aiProposal.warnings.length > 0 && (
+                <div className="rounded-2xl border border-amber-300/30 bg-amber-300/10 p-4 text-xs leading-5 text-amber-100">
+                  {aiProposal.warnings.map((warning, index) => (
+                    <p key={index}>• {warning}</p>
+                  ))}
+                </div>
+              )}
+
+              <div className="rounded-2xl bg-white/[0.04] p-4 text-sm leading-6 text-slate-300">
+                <p>
+                  Points proposés :{" "}
+                  <span className="text-slate-100">{aiProposal.elements.length}</span>
+                </p>
+                <p>
+                  Connexions proposées :{" "}
+                  <span className="text-slate-100">{aiProposal.edges.length}</span>
+                </p>
+              </div>
+
+              <div className="max-h-56 space-y-2 overflow-auto pr-1">
+                {aiProposal.elements.map((element, index) => (
+                  <div
+                    key={element.temp_id}
+                    className="rounded-xl border border-amber-300/20 bg-amber-300/10 p-3 text-xs"
+                  >
+                    <p className="font-medium text-amber-100">
+                      IA{index + 1} · {getAIElementLabel(element)}
+                    </p>
+                    <p className="mt-1 text-slate-400">
+                      Type : {element.type} · confiance :{" "}
+                      {(element.confidence * 100).toFixed(0)}%
+                    </p>
+                    {element.notes && (
+                      <p className="mt-1 text-slate-500">{element.notes}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSaveAIProposal}
+                disabled={savingAIProposal}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-300 px-4 py-3 font-medium text-slate-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingAIProposal ? (
+                  <Loader2 className="animate-spin" size={18} />
+                ) : (
+                  <Save size={18} />
+                )}
+                Sauvegarder la proposition
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setAiProposal(null)}
+                disabled={savingAIProposal}
+                className="w-full rounded-2xl border border-white/10 px-4 py-3 text-sm text-slate-300 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Ignorer la proposition
+              </button>
+            </div>
+          </Panel>
+        )}
           <Panel title="Points du plan" subtitle="Éléments accessibles et obstacles.">
             {elements.length === 0 ? (
               <EmptyState
@@ -1264,4 +1560,110 @@ function EmptyState({
       <p className="text-sm text-slate-400">{text}</p>
     </div>
   );
+}
+
+function mapAIElementTypeToElementType(type: AIElementProposal["type"]): ElementType {
+  if (type === "entrance") return "entrance";
+  if (type === "elevator") return "elevator";
+  if (type === "stairs") return "stairs";
+  if (type === "ramp") return "ramp";
+  if (type === "door") return "door";
+  if (type === "toilet") return "toilet";
+  if (type === "accessible_toilet") return "toilet";
+  if (type === "obstacle") return "obstacle";
+
+  return "room";
+}
+
+function mapAIEdgeTypeToEdgeType(type: AIEdgeProposal["edge_type"]): EdgeType {
+  if (type === "corridor") return "corridor";
+  if (type === "door") return "door";
+  if (type === "ramp") return "ramp";
+  if (type === "elevator") return "elevator";
+  if (type === "stairs") return "stairs";
+  if (type === "manual") return "manual";
+
+  return "manual";
+}
+
+function getAIElementLabel(element: AIElementProposal) {
+  const cleanName = element.name?.trim();
+
+  if (cleanName) {
+    return cleanName;
+  }
+
+  if (element.type === "corridor") return "Couloir";
+  if (element.type === "accessible_toilet") return "Toilettes PMR";
+  if (element.type === "unknown") return "Élément proposé";
+
+  return labelByType[mapAIElementTypeToElementType(element.type)];
+}
+
+function clamp01(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
+function estimateDistanceFromCoordinates({
+  floor,
+  fromX,
+  fromY,
+  toX,
+  toY,
+}: {
+  floor: Floor;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+}) {
+  if (!floor.real_width_meters || !floor.real_height_meters) {
+    return 5;
+  }
+
+  const dxMeters = Math.abs(toX - fromX) * floor.real_width_meters;
+  const dyMeters = Math.abs(toY - fromY) * floor.real_height_meters;
+  const distance = Math.sqrt(dxMeters ** 2 + dyMeters ** 2);
+
+  return Number(distance.toFixed(1));
+}
+
+
+function AIMapMarker({
+  element,
+  index,
+}: {
+  element: AIElementProposal;
+  index: number;
+}) {
+  return (
+    <div
+      className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-2"
+      style={{
+        left: `${clamp01(element.x) * 100}%`,
+        top: `${clamp01(element.y) * 100}%`,
+      }}
+    >
+      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-300 text-xs font-bold text-slate-950 shadow-lg shadow-amber-950/40 ring-4 ring-slate-950/70">
+        IA{index}
+      </div>
+
+      <div className="hidden rounded-full bg-slate-950/85 px-3 py-1 text-xs text-amber-100 backdrop-blur md:block">
+        {getAIElementLabel(element)} · {(element.confidence * 100).toFixed(0)}%
+      </div>
+    </div>
+  );
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  return "Erreur inconnue.";
 }
