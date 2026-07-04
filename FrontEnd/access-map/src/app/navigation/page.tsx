@@ -16,6 +16,7 @@ import {
   Route,
   ShieldAlert,
   Triangle,
+  Volume2,
   Waypoints,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
@@ -497,6 +498,59 @@ export default function NavigationPage() {
     return elements.find((element) => element.id === elementId) ?? null;
   }
 
+  function getRouteInstructionsText() {
+    if (!routeResult) return "";
+
+    const instructions = routeResult.nodeIds
+      .map((nodeId, index) => {
+        const current = getElementById(nodeId);
+        const nextNodeId = routeResult.nodeIds[index + 1];
+
+        if (!current) return "";
+
+        const currentLabel = current.label || labelByType[current.type];
+        const nextLabel = nextNodeId ? getElementLabel(nextNodeId) : null;
+
+        if (index === 0 && nextLabel) {
+          return `Départ depuis ${currentLabel}. Continuez vers ${nextLabel}.`;
+        }
+
+        if (nextLabel) {
+          return `Depuis ${currentLabel}, continuez vers ${nextLabel}.`;
+        }
+
+        return `Vous êtes arrivé à destination: ${currentLabel}.`;
+      })
+      .filter(Boolean);
+
+    return `Itinéraire accessible pour profil ${mobilityLabels[mobilityProfile]}. Distance estimée: ${routeResult.totalDistance.toFixed(
+      1
+    )} mètres. ${instructions.join(" ")}`;
+  }
+
+  function speakRouteInstructions() {
+    const text = getRouteInstructionsText();
+
+    if (!text) {
+      setErrorMessage("Calculez d'abord un itinéraire.");
+      return;
+    }
+
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      setErrorMessage("La synthèse vocale n'est pas disponible sur ce navigateur.");
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "fr-FR";
+    utterance.rate = 0.9;
+    utterance.pitch = 1;
+
+    window.speechSynthesis.speak(utterance);
+  }
+
   function getElementLabel(elementId: string) {
     const element = getElementById(elementId);
 
@@ -595,7 +649,7 @@ export default function NavigationPage() {
         </div>
       </header>
 
-      <section className="mx-auto grid max-w-7xl gap-6 px-6 py-8 lg:grid-cols-[0.8fr_1.5fr_0.8fr]">
+      <section className="mx-auto grid max-w-7xl gap-4 px-4 py-4 sm:gap-6 sm:px-6 sm:py-8 lg:grid-cols-[0.8fr_1.5fr_0.8fr]">
         <aside className="space-y-6">
           <Panel
             title="1. Choisir le bâtiment"
@@ -681,7 +735,7 @@ export default function NavigationPage() {
                   onChange={(event) =>
                     setMobilityProfile(event.target.value as MobilityProfile)
                   }
-                  className="w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm outline-none focus:border-cyan-300"
+                  className="w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-4 text-base outline-none focus:border-cyan-300"
                 >
                   <option value="walker">Déambulateur</option>
                   <option value="wheelchair">Fauteuil roulant</option>
@@ -747,7 +801,7 @@ export default function NavigationPage() {
               </div>
             </div>
           ) : (
-            <div className="relative flex min-h-[540px] items-center justify-center overflow-auto rounded-3xl bg-slate-900 p-4">
+            <div className="relative flex min-h-[420px] items-center justify-center overflow-auto rounded-3xl bg-slate-900 p-3 sm:min-h-[540px] sm:p-4">
               <div className="relative inline-block">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -784,9 +838,15 @@ export default function NavigationPage() {
                               ? "#64748b"
                               : "#f87171"
                         }
-                        strokeWidth={isInRoute ? "1.2" : "0.7"}
+                        strokeWidth={isInRoute ? "2" : "0.55"}
                         strokeLinecap="round"
-                        strokeDasharray={isAllowed ? "0" : "2 1.4"}
+                        strokeDasharray={
+                          isInRoute
+                            ? "0"
+                            : edge.wheelchair_accessible
+                            ? "0"
+                            : "2 1.5"
+                        }
                       />
                     );
                   })}
@@ -825,6 +885,15 @@ export default function NavigationPage() {
                     {routeResult.totalDistance.toFixed(1)} m
                   </p>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={speakRouteInstructions}
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-5 py-4 text-base font-bold text-slate-950 hover:bg-slate-200"
+                >
+                  <Volume2 size={20} />
+                  Écouter les instructions
+                </button>
 
                 <div className="space-y-3">
                   {routeResult.steps.map((step, index) => {
@@ -1426,13 +1495,13 @@ function SelectBlock({
 }) {
   return (
     <div>
-      <label className="mb-2 block text-sm text-slate-300">{label}</label>
+      <label className="mb-2 block text-base font-medium text-slate-200">{label}</label>
 
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
         disabled={options.length === 0}
-        className="w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm outline-none focus:border-cyan-300 disabled:opacity-50"
+        className="w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-4 text-base outline-none focus:border-cyan-300 disabled:opacity-50"
       >
         {options.length === 0 ? (
           <option value="">{emptyLabel}</option>
@@ -1466,7 +1535,7 @@ function MapMarker({
       }}
     >
       <div
-        className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold shadow-lg ring-4 ${
+        className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold shadow-lg ring-4 ${
           highlighted
             ? "bg-cyan-300 text-slate-950 ring-cyan-300/30"
             : "bg-slate-950 text-cyan-200 ring-cyan-400/40"
@@ -1476,7 +1545,7 @@ function MapMarker({
       </div>
 
       <div
-        className={`hidden rounded-full px-3 py-1 text-xs backdrop-blur md:block ${
+        className={`hidden rounded-full px-3 py-1 text-sm font-medium backdrop-blur sm:block ${
           highlighted
             ? "bg-cyan-300 text-slate-950"
             : "bg-slate-950/85 text-white"
@@ -1567,6 +1636,20 @@ function LegendItem({
       <span>{text}</span>
     </div>
   );
+}
+
+function speak(text: string) {
+  if (typeof window === "undefined") return;
+
+  const synth = window.speechSynthesis;
+  synth.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "fr-FR";
+  utterance.rate = 0.9;
+  utterance.pitch = 1;
+
+  synth.speak(utterance);
 }
 
 function getEdgeInstruction({
