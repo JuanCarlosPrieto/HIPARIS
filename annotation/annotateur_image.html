@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Annotateur d'image — points & graphe</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --panel:#ffffff; --border:#e2e5ea; --text:#1f2430;
+    --muted:#697086; --accent:#3454d1; --accent-soft:#eaeefb;
+    --danger:#d1344b; --shadow:0 6px 24px rgba(20,25,40,.10);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column;
+  }
+  header{
+    display:flex; align-items:center; gap:14px; padding:10px 16px;
+    background:var(--panel); border-bottom:1px solid var(--border); flex-wrap:wrap;
+  }
+  header h1{font-size:16px; margin:0; font-weight:650; white-space:nowrap}
+  .spacer{flex:1}
+  button, .btn{
+    font:inherit; cursor:pointer; border:1px solid var(--border); background:var(--panel);
+    color:var(--text); padding:7px 12px; border-radius:8px; transition:.12s;
+  }
+  button:hover{border-color:var(--accent); color:var(--accent)}
+  button.primary{background:var(--accent); color:#fff; border-color:var(--accent)}
+  button.primary:hover{filter:brightness(1.07); color:#fff}
+  button:disabled{opacity:.45; cursor:not-allowed; border-color:var(--border); color:var(--muted)}
+  .zoom{display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted)}
+  .zoom input{width:120px}
+
+  main{flex:1; display:flex; min-height:0}
+  .stage{
+    flex:1; overflow:auto; padding:20px; display:flex; align-items:flex-start;
+    justify-content:center; background:
+      linear-gradient(45deg,#eceef2 25%,transparent 25%,transparent 75%,#eceef2 75%) 0 0/24px 24px,
+      linear-gradient(45deg,#eceef2 25%,#f4f5f7 25%,#f4f5f7 75%,#eceef2 75%) 12px 12px/24px 24px;
+  }
+  .empty{margin:auto; text-align:center; color:var(--muted); max-width:440px}
+  .empty .drop{border:2px dashed var(--border); border-radius:14px; padding:48px 28px; background:var(--panel)}
+  .empty strong{display:block; font-size:17px; color:var(--text); margin-bottom:6px}
+  .empty small{display:block; margin-top:10px}
+
+  #wrap{position:relative; display:inline-block; line-height:0; box-shadow:var(--shadow)}
+  #img{display:block; max-width:none; user-select:none; -webkit-user-drag:none}
+  #img.crosshair{cursor:crosshair}
+
+  /* Couche SVG des connexions (au-dessus de l'image, sous les marqueurs) */
+  #edges{position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; overflow:visible}
+  #edges line{stroke-linecap:round; opacity:.85}
+
+  .marker{
+    position:absolute; width:16px; height:16px; border-radius:50%;
+    border:2px solid #fff; transform:translate(-50%,-50%); box-shadow:0 1px 4px rgba(0,0,0,.4);
+    cursor:pointer;
+  }
+  .marker::after{
+    content:attr(data-label); position:absolute; left:50%; top:-8px; transform:translate(-50%,-100%);
+    background:#1f2430; color:#fff; font-size:11px; line-height:1; padding:4px 7px; border-radius:5px;
+    white-space:nowrap; opacity:0; pointer-events:none; transition:.1s;
+  }
+  .marker:hover::after, .marker.flash::after{opacity:1}
+  .marker.flash{outline:3px solid rgba(52,84,209,.5); outline-offset:2px}
+  .marker.picked{outline:3px solid #111; outline-offset:3px; box-shadow:0 0 0 4px rgba(0,0,0,.12)}
+
+  /* Barre latérale */
+  aside{
+    width:340px; background:var(--panel); border-left:1px solid var(--border);
+    display:flex; flex-direction:column; min-height:0;
+  }
+  .section{padding:12px 16px; border-bottom:1px solid var(--border)}
+  .section h2{font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin:0 0 10px}
+  .cats{display:flex; flex-direction:column; gap:6px; max-height:130px; overflow:auto}
+  .cat{display:flex; align-items:center; gap:9px; font-size:14px}
+  .cat .dot{width:13px; height:13px; border-radius:50%; flex:none}
+  .cat .swatch{width:16px; height:4px; border-radius:2px; flex:none}
+  .cat .name{flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .cat .count{color:var(--muted); font-variant-numeric:tabular-nums}
+  .cat input[type=checkbox]{accent-color:var(--accent)}
+  .cat.off .name, .cat.off .count{opacity:.4; text-decoration:line-through}
+  .addcat{display:flex; gap:6px; margin-top:10px}
+  .addcat input{flex:1; padding:6px 9px; border:1px solid var(--border); border-radius:7px; font:inherit}
+  .hint{font-size:12px; color:var(--muted); margin:10px 0 0; line-height:1.4}
+  .hint b{color:var(--accent)}
+
+  /* Zone des deux tableaux (points / connexions) */
+  .split{flex:1; display:flex; flex-direction:column; min-height:0}
+  .tblbox{flex:1; display:flex; flex-direction:column; min-height:0; border-bottom:1px solid var(--border)}
+  .tblhead{display:flex; justify-content:space-between; align-items:center; padding:10px 16px 6px}
+  .tblhead h2{margin:0; font-size:12px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted)}
+  .tblhead .count{color:var(--text)}
+  .tblbox .tablewrap{flex:1; overflow:auto}
+  table{width:100%; border-collapse:collapse; font-size:13px}
+  th,td{text-align:left; padding:6px 8px; border-bottom:1px solid var(--border); white-space:nowrap}
+  th{position:sticky; top:0; background:var(--panel); color:var(--muted); font-weight:600; z-index:1}
+  td .dot{width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:6px; vertical-align:-1px}
+  td .swatch{width:14px; height:4px; border-radius:2px; display:inline-block; margin-right:6px; vertical-align:2px}
+  tr:hover td{background:var(--accent-soft)}
+  .del{border:none; background:none; color:var(--muted); padding:2px 6px; cursor:pointer}
+  .del:hover{color:var(--danger)}
+  .muted-row{color:var(--muted); text-align:center; padding:18px}
+
+  /* Popups (catégorie de point / type de connexion) */
+  #popup, #edgePopup{
+    position:fixed; z-index:50; background:var(--panel); border:1px solid var(--border);
+    border-radius:10px; box-shadow:var(--shadow); padding:10px; width:230px; display:none;
+  }
+  #popup h3, #edgePopup h3{margin:0 0 8px; font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.4px}
+  .choices{display:flex; flex-direction:column; gap:4px; max-height:230px; overflow:auto}
+  .choice{display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:7px; cursor:pointer; font-size:14px}
+  .choice:hover{background:var(--accent-soft)}
+  .choice .dot{width:12px; height:12px; border-radius:50%; flex:none}
+  .choice .swatch{width:16px; height:4px; border-radius:2px; flex:none}
+  .popup-new{display:flex; gap:6px; margin-top:8px; border-top:1px solid var(--border); padding-top:8px}
+  .popup-new input{flex:1; padding:6px 8px; border:1px solid var(--border); border-radius:7px; font:inherit}
+
+  #toast{
+    position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(20px);
+    background:#1f2430; color:#fff; padding:10px 16px; border-radius:9px; font-size:13px;
+    opacity:0; transition:.2s; pointer-events:none; z-index:100; max-width:80vw;
+  }
+  #toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+
+  /* Bouton IA */
+  button.ai{background:#6b3ce0; color:#fff; border-color:#6b3ce0}
+  button.ai:hover{filter:brightness(1.08); color:#fff}
+  button.ai:disabled{background:var(--panel); color:var(--muted); border-color:var(--border)}
+
+  /* Overlay d'analyse IA */
+  #aiOverlay{position:fixed; inset:0; background:rgba(20,25,40,.55); display:none;
+    align-items:center; justify-content:center; z-index:200}
+  #aiOverlay .box{background:var(--panel); padding:26px 34px; border-radius:14px;
+    box-shadow:var(--shadow); text-align:center; max-width:360px; font-size:14px}
+  .spinner{width:34px; height:34px; border:4px solid var(--border); border-top-color:var(--accent);
+    border-radius:50%; margin:0 auto 14px; animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* Page secondaire : paramètres IA */
+  #aiModal{position:fixed; inset:0; background:rgba(20,25,40,.5); display:none;
+    align-items:center; justify-content:center; z-index:150; padding:24px}
+  .modal-card{background:var(--bg); width:min(780px,100%); max-height:90vh; border-radius:14px;
+    box-shadow:var(--shadow); display:flex; flex-direction:column; overflow:hidden}
+  .modal-head{display:flex; align-items:center; justify-content:space-between; padding:14px 18px;
+    background:var(--panel); border-bottom:1px solid var(--border)}
+  .modal-head h2{margin:0; font-size:16px}
+  .modal-body{padding:16px 18px; overflow:auto}
+  .modal-foot{display:flex; align-items:center; gap:8px; padding:12px 18px;
+    background:var(--panel); border-top:1px solid var(--border)}
+  .modal-foot .spacer{flex:1}
+  button.icon{border:none; background:none; font-size:16px; color:var(--muted); padding:4px 8px}
+  button.icon:hover{color:var(--danger)}
+  .form-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px 16px; margin-bottom:6px}
+  .form-grid label{display:flex; flex-direction:column; font-size:13px; color:var(--muted); gap:4px}
+  .form-grid input, .form-grid select{padding:7px 9px; border:1px solid var(--border);
+    border-radius:7px; font:inherit; color:var(--text); background:var(--panel)}
+  .modal-body h3{font-size:13px; margin:16px 0 4px}
+  .cfg-table{width:100%; border-collapse:collapse; font-size:13px; margin-top:4px}
+  .cfg-table th, .cfg-table td{padding:5px 6px; border-bottom:1px solid var(--border); text-align:left}
+  .cfg-table th{color:var(--muted); font-weight:600}
+  .cfg-table input[type=text]{width:100%; padding:5px 7px; border:1px solid var(--border);
+    border-radius:6px; font:inherit; color:var(--text); background:var(--panel)}
+  .cfg-table input[type=color]{width:40px; height:28px; border:1px solid var(--border);
+    border-radius:6px; background:none; padding:0; cursor:pointer}
+  button.small{margin-top:10px; font-size:13px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🖈 Annotateur d'image</h1>
+  <button id="btnOpen">📁 Importer une image…</button>
+  <button id="btnAI" class="ai" disabled>✨ Annotation IA</button>
+  <div class="zoom">
+    <span>Zoom</span>
+    <input id="zoom" type="range" min="20" max="400" value="100" step="10" disabled>
+    <span id="zoomVal" style="width:44px">100 %</span>
+  </div>
+  <div class="spacer"></div>
+  <button id="btnUndo" disabled>↩︎ Annuler dernier point</button>
+  <button id="btnAISettings">⚙ Paramètres IA</button>
+  <button id="btnLoadJson">Charger JSON…</button>
+  <button id="btnExport" class="primary" disabled>⤓ Exporter JSON</button>
+  <input type="file" id="fileImg" accept="image/*" hidden>
+  <input type="file" id="fileJson" accept="application/json,.json" hidden>
+</header>
+
+<main>
+  <div class="stage" id="stage">
+    <div class="empty" id="empty">
+      <div class="drop">
+        <strong>Aucune image chargée</strong>
+        Importe une image, puis clique dessus pour poser un point et choisir sa catégorie.
+        <small>Pour relier deux points : <b>Maj + clic</b> sur le premier, puis sur le second.</small>
+      </div>
+    </div>
+    <div id="wrap" style="display:none">
+      <img id="img" alt="image à annoter">
+      <svg id="edges" preserveAspectRatio="none"></svg>
+    </div>
+  </div>
+
+  <aside>
+    <div class="section">
+      <h2>Catégories (points)</h2>
+      <div class="cats" id="cats"></div>
+      <div class="addcat">
+        <input id="newCat" type="text" placeholder="Nouvelle catégorie…">
+        <button id="btnAddCat">+ Ajouter</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Types de connexion</h2>
+      <div class="cats" id="edgeCats"></div>
+      <div class="addcat">
+        <input id="newEdgeType" type="text" placeholder="Nouveau type de lien…">
+        <button id="btnAddEdgeType">+ Ajouter</button>
+      </div>
+      <p class="hint"><b>Maj + clic</b> sur deux points pour créer une connexion, puis choisis son type.</p>
+    </div>
+
+    <div class="split">
+      <div class="tblbox">
+        <div class="tblhead">
+          <h2>Points : <span class="count" id="count">0</span></h2>
+          <button id="btnClear" disabled>Tout effacer</button>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>ID</th><th>Élément</th><th>x</th><th>y</th><th></th></tr></thead>
+            <tbody id="tbody"><tr><td colspan="5" class="muted-row">Aucune annotation</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="tblbox">
+        <div class="tblhead">
+          <h2>Connexions : <span class="count" id="edgeCount">0</span></h2>
+          <button id="btnClearEdges" disabled>Tout effacer</button>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>ID</th><th>Type</th><th>Lien</th><th>px</th><th></th></tr></thead>
+            <tbody id="edgeTbody"><tr><td colspan="5" class="muted-row">Aucune connexion</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<!-- Popup : catégorie d'un point (apparaît au clic sur l'image) -->
+<div id="popup">
+  <h3>Type d'élément</h3>
+  <div class="choices" id="choices"></div>
+  <div class="popup-new">
+    <input id="popupNew" type="text" placeholder="Autre catégorie…">
+    <button id="popupAdd">OK</button>
+  </div>
+</div>
+
+<!-- Popup : type de connexion (apparaît après avoir relié deux points) -->
+<div id="edgePopup">
+  <h3>Type de connexion</h3>
+  <div class="choices" id="edgeChoices"></div>
+  <div class="popup-new">
+    <input id="edgePopupNew" type="text" placeholder="Autre type…">
+    <button id="edgePopupAdd">OK</button>
+  </div>
+</div>
+
+<!-- Overlay pendant l'analyse IA -->
+<div id="aiOverlay">
+  <div class="box">
+    <div class="spinner"></div>
+    <div id="aiOverlayMsg">Analyse IA en cours…</div>
+  </div>
+</div>
+
+<!-- Page secondaire : paramètres de l'IA et prompts -->
+<div id="aiModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2>⚙ Paramètres IA</h2>
+      <button id="aiClose" class="icon" title="Fermer">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <label>Fournisseur IA<select id="cfgProvider">
+          <option value="owlv2">OWLv2 — local, gratuit</option>
+          <option value="openai">ChatGPT — OpenAI</option>
+          <option value="anthropic">Claude — Anthropic</option>
+          <option value="gemini">Gemini — Google</option>
+        </select></label>
+        <label>Modèle<input id="cfgModel" type="text"></label>
+        <label style="grid-column:1 / -1">Clé API <span style="color:var(--muted);font-weight:400">(requise pour ChatGPT / Claude / Gemini — stockée en local dans ton navigateur)</span><input id="cfgApiKey" type="password" autocomplete="off"></label>
+        <label>URL du serveur<input id="cfgUrl" type="text" placeholder="http://localhost:8000"></label>
+        <label>Seuil de confiance<input id="cfgConf" type="number" step="0.01" min="0" max="1"></label>
+        <label>Dédoublonnage (px)<input id="cfgDedup" type="number" step="1" min="0"></label>
+        <label>Connexions auto<select id="cfgConnex">
+          <option value="none">aucune</option>
+          <option value="delaunay">Delaunay</option>
+          <option value="knn">k plus proches voisins</option>
+        </select></label>
+        <label>k (si k-NN)<input id="cfgK" type="number" step="1" min="1"></label>
+        <label>Distance max arête (px, vide = illimité)<input id="cfgMaxDist" type="number" step="1" min="0"></label>
+      </div>
+
+      <h3>Catégories détectées &amp; prompts</h3>
+      <p class="hint">Le détecteur reconnaît mieux les <b>prompts en anglais</b>. Plusieurs prompts par catégorie : sépare-les par des virgules. Décoche une ligne pour l'ignorer sans la supprimer.</p>
+      <table class="cfg-table">
+        <thead><tr><th>Actif</th><th>Catégorie (FR)</th><th>Prompts (EN, séparés par « , »)</th><th>Couleur</th><th></th></tr></thead>
+        <tbody id="cfgCats"></tbody>
+      </table>
+      <button id="cfgAddCat" class="small">+ Ajouter une catégorie</button>
+    </div>
+    <div class="modal-foot">
+      <button id="cfgReset">Réinitialiser</button>
+      <span class="spacer"></span>
+      <button id="cfgCancel">Annuler</button>
+      <button id="cfgSave" class="primary">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ *  Palettes de couleurs                                              *
+ * ------------------------------------------------------------------ */
+const PALETTE = ['#e6194b','#3cb44b','#4363d8','#f58231','#911eb4','#42d4f4',
+  '#f032e6','#3d9970','#e6ac00','#800000','#000075','#a9a9a9','#f781bf','#00838f'];
+const EDGE_PALETTE = ['#2c7fb8','#31a354','#e6550d','#756bb1','#c51b8a',
+  '#1c9099','#d95f0e','#5254a3','#8c6d31','#843c39'];
+
+/* Catégories de points prédéfinies */
+const DEFAULT_CATS = {
+  'porte':'#e6194b', 'escalier':'#3cb44b', 'sortie':'#4363d8',
+  'extincteur':'#f58231', 'mur':'#911eb4'
+};
+/* Types de connexion prédéfinis */
+const DEFAULT_EDGE_TYPES = {
+  'accès':'#2c7fb8', 'circulation':'#31a354', 'évacuation':'#e6550d', 'adjacent':'#756bb1'
+};
+
+/* ------------------------------------------------------------------ *
+ *  État de l'application                                             *
+ * ------------------------------------------------------------------ */
+const state = {
+  imageName:null, imageW:0, imageH:0,
+  annotations:[],                     // nœuds : {id, nom, x, y, couleur}
+  edges:[],                           // arêtes : {id, source, target, type, couleur, distance}
+  categories:{...DEFAULT_CATS},       // nom de catégorie -> couleur
+  edgeTypes:{...DEFAULT_EDGE_TYPES},  // type de lien   -> couleur
+  hidden:new Set(),                   // catégories de points masquées
+  hiddenEdges:new Set(),              // types de liens masqués
+  nextId:1, nextEdgeId:1,
+  zoom:1,
+  pending:null                        // clic en attente d'une catégorie
+};
+let pendingEdge = null;               // {source} puis {source, target} en attente de type
+
+/* Raccourcis DOM */
+const $ = id => document.getElementById(id);
+const wrap=$('wrap'), img=$('img'), empty=$('empty');
+const edgesSvg=$('edges');
+const popup=$('popup'), choices=$('choices');
+const edgePopup=$('edgePopup'), edgeChoices=$('edgeChoices');
+const SVGNS='http://www.w3.org/2000/svg';
+
+const annById = id => state.annotations.find(a=>a.id===id);
+
+/* ------------------------------------------------------------------ *
+ *  Import de l'image                                                 *
+ * ------------------------------------------------------------------ */
+$('btnOpen').onclick = () => $('fileImg').click();
+$('fileImg').onchange = e => {
+  const f = e.target.files[0]; if(!f) return;
+  const url = URL.createObjectURL(f);
+  const rd = new FileReader();                       // version base64 pour l'envoi à l'IA
+  rd.onload = () => { state.imageDataURL = rd.result; };
+  rd.readAsDataURL(f);
+  img.onload = () => {
+    state.imageName = f.name;
+    state.imageW = img.naturalWidth;
+    state.imageH = img.naturalHeight;
+    edgesSvg.setAttribute('viewBox', `0 0 ${state.imageW} ${state.imageH}`);
+    setZoom(1);
+    empty.style.display='none'; wrap.style.display='inline-block';
+    img.classList.add('crosshair');
+    $('zoom').disabled=false; $('btnExport').disabled=false; $('btnAI').disabled=false;
+    render();
+    toast(`Image « ${f.name} » — ${state.imageW}×${state.imageH} px`);
+  };
+  img.src = url;
+  e.target.value='';   // permet de réimporter le même fichier
+};
+
+/* ------------------------------------------------------------------ *
+ *  Zoom                                                              *
+ * ------------------------------------------------------------------ */
+function setZoom(z){
+  state.zoom = z;
+  img.style.width  = (state.imageW * z) + 'px';
+  img.style.height = (state.imageH * z) + 'px';
+  $('zoom').value = Math.round(z*100);
+  $('zoomVal').textContent = Math.round(z*100)+' %';
+}
+$('zoom').oninput = e => setZoom(parseInt(e.target.value,10)/100);
+
+/* ------------------------------------------------------------------ *
+ *  Clic sur l'image -> pose un point (sauf Maj, réservé aux liens)   *
+ * ------------------------------------------------------------------ */
+img.onclick = e => {
+  if(e.shiftKey) return;                         // Maj = mode connexion (géré sur les marqueurs)
+  const r = img.getBoundingClientRect();
+  const x = Math.round((e.clientX - r.left) / r.width  * state.imageW);
+  const y = Math.round((e.clientY - r.top ) / r.height * state.imageH);
+  if(x<0||y<0||x>state.imageW||y>state.imageH) return;
+  state.pending = {x, y};
+  openPopup(popup, e.clientX, e.clientY);
+};
+
+/* ------------------------------------------------------------------ *
+ *  Popups (positionnement commun)                                    *
+ * ------------------------------------------------------------------ */
+function openPopup(el, clientX, clientY){
+  if(el===popup) buildNodeChoices(); else buildEdgeChoices();
+  el.style.display='block';
+  const w=el.offsetWidth, h=el.offsetHeight;
+  let px = clientX+8, py = clientY+8;
+  if(px+w > innerWidth)  px = clientX-w-8;
+  if(py+h > innerHeight) py = innerHeight-h-8;
+  el.style.left=Math.max(8,px)+'px';
+  el.style.top =Math.max(8,py)+'px';
+  (el===popup ? $('popupNew') : $('edgePopupNew')).value='';
+}
+
+/* --- Popup catégorie de point --- */
+function buildNodeChoices(){
+  choices.innerHTML='';
+  for(const [nom,couleur] of Object.entries(state.categories)){
+    const el=document.createElement('div');
+    el.className='choice';
+    el.innerHTML=`<span class="dot" style="background:${couleur}"></span>${nom}`;
+    el.onclick=()=>addAnnotation(nom);
+    choices.appendChild(el);
+  }
+}
+function closePopup(){ popup.style.display='none'; state.pending=null; }
+
+function addAnnotation(nom){
+  if(!state.pending) return;
+  state.annotations.push({id:state.nextId++, nom, x:state.pending.x, y:state.pending.y, couleur:state.categories[nom]});
+  closePopup(); render();
+}
+$('popupAdd').onclick = () => {
+  const nom = $('popupNew').value.trim().toLowerCase();
+  if(!nom) return;
+  ensureCategory(nom); addAnnotation(nom);
+};
+$('popupNew').onkeydown = e => { if(e.key==='Enter') $('popupAdd').onclick(); };
+
+/* --- Popup type de connexion --- */
+function buildEdgeChoices(){
+  edgeChoices.innerHTML='';
+  for(const [type,couleur] of Object.entries(state.edgeTypes)){
+    const el=document.createElement('div');
+    el.className='choice';
+    el.innerHTML=`<span class="swatch" style="background:${couleur}"></span>${type}`;
+    el.onclick=()=>createEdgeFromPending(type);
+    edgeChoices.appendChild(el);
+  }
+}
+function closeEdgePopup(){
+  edgePopup.style.display='none';
+  if(pendingEdge){ pendingEdge=null; renderMarkers(); }
+}
+$('edgePopupAdd').onclick = () => {
+  const type = $('edgePopupNew').value.trim().toLowerCase();
+  if(!type) return;
+  ensureEdgeType(type); createEdgeFromPending(type);
+};
+$('edgePopupNew').onkeydown = e => { if(e.key==='Enter') $('edgePopupAdd').onclick(); };
+
+/* ------------------------------------------------------------------ *
+ *  Création des catégories / types (couleur auto)                    *
+ * ------------------------------------------------------------------ */
+function ensureCategory(nom){
+  if(state.categories[nom]) return;
+  const used=new Set(Object.values(state.categories));
+  state.categories[nom] = PALETTE.find(c=>!used.has(c)) || PALETTE[Object.keys(state.categories).length%PALETTE.length];
+}
+function ensureEdgeType(type){
+  if(state.edgeTypes[type]) return;
+  const used=new Set(Object.values(state.edgeTypes));
+  state.edgeTypes[type] = EDGE_PALETTE.find(c=>!used.has(c)) || EDGE_PALETTE[Object.keys(state.edgeTypes).length%EDGE_PALETTE.length];
+}
+$('btnAddCat').onclick = () => {
+  const nom = $('newCat').value.trim().toLowerCase();
+  if(!nom) return;
+  if(state.categories[nom]) toast('Catégorie déjà existante');
+  else { ensureCategory(nom); toast(`Catégorie « ${nom} » ajoutée`); }
+  $('newCat').value=''; render();
+};
+$('newCat').onkeydown = e => { if(e.key==='Enter') $('btnAddCat').onclick(); };
+$('btnAddEdgeType').onclick = () => {
+  const t = $('newEdgeType').value.trim().toLowerCase();
+  if(!t) return;
+  if(state.edgeTypes[t]) toast('Type déjà existant');
+  else { ensureEdgeType(t); toast(`Type de lien « ${t} » ajouté`); }
+  $('newEdgeType').value=''; render();
+};
+$('newEdgeType').onkeydown = e => { if(e.key==='Enter') $('btnAddEdgeType').onclick(); };
+
+/* ------------------------------------------------------------------ *
+ *  Sélection des deux nœuds d'une connexion (Maj + clic)             *
+ * ------------------------------------------------------------------ */
+function pickEdgeNode(id, cx, cy){
+  if(!pendingEdge){
+    pendingEdge={source:id};
+    renderMarkers();
+    toast('1er point sélectionné — Maj + clic sur le 2ᵉ');
+    return;
+  }
+  if(pendingEdge.source===id){          // reclic sur le même -> annule
+    pendingEdge=null; renderMarkers(); toast('Sélection annulée'); return;
+  }
+  const s=pendingEdge.source;
+  if(state.edges.some(e=>(e.source===s&&e.target===id)||(e.source===id&&e.target===s))){
+    toast('Connexion déjà existante entre ces deux points'); pendingEdge=null; renderMarkers(); return;
+  }
+  pendingEdge.target=id;
+  openPopup(edgePopup, cx, cy);
+}
+function createEdgeFromPending(type){
+  if(!pendingEdge || pendingEdge.target==null) return;
+  ensureEdgeType(type);
+  const s=annById(pendingEdge.source), t=annById(pendingEdge.target);
+  const dist=Math.round(Math.hypot(s.x-t.x, s.y-t.y));
+  state.edges.push({id:state.nextEdgeId++, source:s.id, target:t.id, type, couleur:state.edgeTypes[type], distance:dist});
+  pendingEdge=null; edgePopup.style.display='none'; render();
+  toast(`Connexion « ${type} » créée — ${dist} px`);
+}
+
+/* Fermeture des popups au clic extérieur / Échap */
+document.addEventListener('mousedown', e=>{
+  if(popup.style.display==='block' && !popup.contains(e.target) && e.target!==img) closePopup();
+  if(edgePopup.style.display==='block' && !edgePopup.contains(e.target)) closeEdgePopup();
+});
+document.addEventListener('keydown', e=>{ if(e.key==='Escape'){ closePopup(); closeEdgePopup(); } });
+
+/* ------------------------------------------------------------------ *
+ *  Suppression / annulation                                          *
+ * ------------------------------------------------------------------ */
+function deleteAnnotation(id){
+  state.annotations = state.annotations.filter(a=>a.id!==id);
+  state.edges = state.edges.filter(e=>e.source!==id && e.target!==id);  // retire les liens orphelins
+  render();
+}
+function deleteEdge(id){ state.edges = state.edges.filter(e=>e.id!==id); render(); }
+
+$('btnUndo').onclick = () => {
+  const a=state.annotations.pop();
+  if(a) state.edges = state.edges.filter(e=>e.source!==a.id && e.target!==a.id);
+  render();
+};
+$('btnClear').onclick = () => {
+  if(state.annotations.length && confirm('Effacer tous les points ET leurs connexions ?')){
+    state.annotations=[]; state.edges=[]; render();
+  }
+};
+$('btnClearEdges').onclick = () => {
+  if(state.edges.length && confirm('Effacer toutes les connexions ?')){ state.edges=[]; render(); }
+};
+
+/* ------------------------------------------------------------------ *
+ *  Rendu                                                             *
+ * ------------------------------------------------------------------ */
+function render(){
+  renderEdges(); renderMarkers();
+  renderCats(); renderEdgeCats();
+  renderTable(); renderEdgeTable();
+  updateHeader();
+}
+
+function renderEdges(){
+  edgesSvg.innerHTML='';
+  for(const e of state.edges){
+    if(state.hiddenEdges.has(e.type)) continue;
+    const s=annById(e.source), t=annById(e.target);
+    if(!s||!t) continue;
+    const line=document.createElementNS(SVGNS,'line');
+    line.setAttribute('x1',s.x); line.setAttribute('y1',s.y);
+    line.setAttribute('x2',t.x); line.setAttribute('y2',t.y);
+    line.setAttribute('stroke',e.couleur);
+    line.setAttribute('stroke-width',3);
+    line.setAttribute('vector-effect','non-scaling-stroke');  // épaisseur constante quel que soit le zoom
+    line.id='edge-'+e.id;
+    edgesSvg.appendChild(line);
+  }
+}
+
+function renderMarkers(){
+  wrap.querySelectorAll('.marker').forEach(m=>m.remove());
+  for(const a of state.annotations){
+    if(state.hidden.has(a.nom)) continue;
+    const m=document.createElement('div');
+    m.className='marker'+((pendingEdge && pendingEdge.source===a.id)?' picked':'');
+    m.style.left=(a.x/state.imageW*100)+'%';
+    m.style.top =(a.y/state.imageH*100)+'%';
+    m.style.background=a.couleur;
+    m.dataset.label=`${a.nom} (#${a.id})`;
+    m.onclick=ev=>{
+      ev.stopPropagation();
+      if(ev.shiftKey){ ev.preventDefault(); pickEdgeNode(a.id, ev.clientX, ev.clientY); }
+      else flashRow('row-'+a.id);
+    };
+    wrap.appendChild(m);
+  }
+}
+
+function renderCats(){
+  const counts={}; state.annotations.forEach(a=>counts[a.nom]=(counts[a.nom]||0)+1);
+  const box=$('cats'); box.innerHTML='';
+  for(const [nom,couleur] of Object.entries(state.categories)){
+    const off=state.hidden.has(nom);
+    const row=document.createElement('label');
+    row.className='cat'+(off?' off':'');
+    row.innerHTML=`<input type="checkbox" ${off?'':'checked'}>
+      <span class="dot" style="background:${couleur}"></span>
+      <span class="name">${nom}</span><span class="count">${counts[nom]||0}</span>`;
+    row.querySelector('input').onchange=ev=>{
+      ev.target.checked ? state.hidden.delete(nom) : state.hidden.add(nom); render();
+    };
+    box.appendChild(row);
+  }
+}
+
+function renderEdgeCats(){
+  const counts={}; state.edges.forEach(e=>counts[e.type]=(counts[e.type]||0)+1);
+  const box=$('edgeCats'); box.innerHTML='';
+  for(const [type,couleur] of Object.entries(state.edgeTypes)){
+    const off=state.hiddenEdges.has(type);
+    const row=document.createElement('label');
+    row.className='cat'+(off?' off':'');
+    row.innerHTML=`<input type="checkbox" ${off?'':'checked'}>
+      <span class="swatch" style="background:${couleur}"></span>
+      <span class="name">${type}</span><span class="count">${counts[type]||0}</span>`;
+    row.querySelector('input').onchange=ev=>{
+      ev.target.checked ? state.hiddenEdges.delete(type) : state.hiddenEdges.add(type); render();
+    };
+    box.appendChild(row);
+  }
+}
+
+function renderTable(){
+  const tb=$('tbody');
+  if(!state.annotations.length){ tb.innerHTML='<tr><td colspan="5" class="muted-row">Aucune annotation</td></tr>'; return; }
+  tb.innerHTML='';
+  for(const a of state.annotations){
+    const tr=document.createElement('tr'); tr.id='row-'+a.id;
+    tr.innerHTML=`<td>${a.id}</td>
+      <td><span class="dot" style="background:${a.couleur}"></span>${a.nom}</td>
+      <td>${a.x}</td><td>${a.y}</td>
+      <td><button class="del" title="Supprimer">✕</button></td>`;
+    tr.querySelector('.del').onclick=()=>deleteAnnotation(a.id);
+    tr.onmouseenter=()=>highlightMarker(a.id,true);
+    tr.onmouseleave=()=>highlightMarker(a.id,false);
+    tb.appendChild(tr);
+  }
+}
+
+function renderEdgeTable(){
+  const tb=$('edgeTbody');
+  if(!state.edges.length){ tb.innerHTML='<tr><td colspan="5" class="muted-row">Aucune connexion</td></tr>'; return; }
+  tb.innerHTML='';
+  for(const e of state.edges){
+    const s=annById(e.source), t=annById(e.target);
+    const label = `#${e.source} ${s?s.nom:'?'} — #${e.target} ${t?t.nom:'?'}`;
+    const tr=document.createElement('tr'); tr.id='erow-'+e.id;
+    tr.innerHTML=`<td>${e.id}</td>
+      <td><span class="swatch" style="background:${e.couleur}"></span>${e.type}</td>
+      <td title="${label}">#${e.source} — #${e.target}</td>
+      <td>${e.distance}</td>
+      <td><button class="del" title="Supprimer">✕</button></td>`;
+    tr.querySelector('.del').onclick=()=>deleteEdge(e.id);
+    tr.onmouseenter=()=>highlightEdge(e.id,true);
+    tr.onmouseleave=()=>highlightEdge(e.id,false);
+    tb.appendChild(tr);
+  }
+}
+
+function updateHeader(){
+  $('count').textContent=state.annotations.length;
+  $('edgeCount').textContent=state.edges.length;
+  $('btnUndo').disabled=!state.annotations.length;
+  $('btnClear').disabled=!state.annotations.length;
+  $('btnClearEdges').disabled=!state.edges.length;
+}
+
+/* Surlignages croisés */
+function highlightMarker(id,on){
+  const idx=state.annotations.filter(a=>!state.hidden.has(a.nom)).findIndex(a=>a.id===id);
+  const m=wrap.querySelectorAll('.marker')[idx];
+  if(m) m.classList.toggle('flash',on);
+}
+function highlightEdge(id,on){
+  const line=$('edge-'+id);
+  if(line){ line.setAttribute('stroke-width', on?6:3); line.style.opacity=on?1:.85; }
+}
+function flashRow(rowId){
+  const row=$(rowId);
+  if(row){ row.scrollIntoView({block:'nearest'}); row.style.transition='background .1s';
+    row.style.background='#dbe3ff'; setTimeout(()=>row.style.background='',700); }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Export JSON (nœuds + arêtes)                                      *
+ * ------------------------------------------------------------------ */
+$('btnExport').onclick = () => {
+  const data={
+    image:{ nom_fichier:state.imageName, largeur:state.imageW, hauteur:state.imageH },
+    date_export:new Date().toISOString(),
+    categories:state.categories,
+    types_connexion:state.edgeTypes,
+    nb_annotations:state.annotations.length,
+    nb_connexions:state.edges.length,
+    annotations:state.annotations.map(a=>({ id:a.id, nom:a.nom, x:a.x, y:a.y, couleur:a.couleur })),
+    connexions:state.edges.map(e=>({
+      id:e.id, source:e.source, cible:e.target, type:e.type, couleur:e.couleur, distance:e.distance
+    }))
+  };
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  const base=(state.imageName||'annotations').replace(/\.[^.]+$/,'');
+  a.href=URL.createObjectURL(blob); a.download=base+'_annotations.json';
+  a.click(); URL.revokeObjectURL(a.href);
+  toast('Export JSON téléchargé');
+};
+
+/* ------------------------------------------------------------------ *
+ *  Chargement d'un JSON existant                                     *
+ * ------------------------------------------------------------------ */
+$('btnLoadJson').onclick = () => $('fileJson').click();
+$('fileJson').onchange = e => {
+  const f=e.target.files[0]; if(!f) return;
+  const rd=new FileReader();
+  rd.onload=()=>{
+    try{
+      const d=JSON.parse(rd.result);
+      applyGraph(d);
+      const warn = (state.imageName && d.image && d.image.nom_fichier && d.image.nom_fichier!==state.imageName)
+                    ? ` — ⚠ image d'origine : ${d.image.nom_fichier}` : '';
+      toast(`${state.annotations.length} point(s), ${state.edges.length} connexion(s) chargé(s)${warn}`);
+    }catch(err){ toast('JSON invalide : '+err.message); }
+  };
+  rd.readAsText(f); e.target.value='';
+};
+
+/* ------------------------------------------------------------------ *
+ *  Toast                                                             *
+ * ------------------------------------------------------------------ */
+let toastTimer;
+function toast(msg){
+  const t=$('toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2600);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Application d'un graphe (partagé : chargement JSON & résultat IA)  *
+ * ------------------------------------------------------------------ */
+function applyGraph(d){
+  if(!Array.isArray(d.annotations)) throw new Error('champ « annotations » manquant');
+  // Nœuds
+  state.categories={...DEFAULT_CATS, ...(d.categories||{})};
+  state.annotations = d.annotations.map(a=>({
+    id:a.id, nom:a.nom, x:a.x, y:a.y, couleur:a.couleur || (state.categories[a.nom]||'#a9a9a9')
+  }));
+  state.annotations.forEach(a=>ensureCategory(a.nom));
+  state.nextId=(state.annotations.reduce((m,a)=>Math.max(m,a.id||0),0))+1;
+  // Arêtes
+  state.edgeTypes={...DEFAULT_EDGE_TYPES, ...(d.types_connexion||{})};
+  state.edges = (d.connexions||[]).map(e=>{
+    const target = (e.cible!==undefined)?e.cible:e.target;
+    return { id:e.id, source:e.source, target, type:e.type||'lien', couleur:e.couleur||null, distance:e.distance };
+  });
+  state.edges.forEach(e=>{
+    ensureEdgeType(e.type);
+    if(!e.couleur) e.couleur=state.edgeTypes[e.type];
+    if(e.distance==null){ const s=annById(e.source), t=annById(e.target); if(s&&t) e.distance=Math.round(Math.hypot(s.x-t.x,s.y-t.y)); }
+  });
+  state.nextEdgeId=(state.edges.reduce((m,e)=>Math.max(m,e.id||0),0))+1;
+  render();
+}
+
+/* ------------------------------------------------------------------ *
+ *  Configuration IA (persistée en localStorage)                      *
+ * ------------------------------------------------------------------ */
+const AI_KEY='annotateur_ai_config';
+const PROVIDER_LABELS={owlv2:'OWLv2 (local)', openai:'ChatGPT', anthropic:'Claude', gemini:'Gemini'};
+const PROVIDER_MODELS={owlv2:'google/owlv2-base-patch16-ensemble', openai:'gpt-4o', anthropic:'claude-opus-4-8', gemini:'gemini-2.5-flash'};
+function defaultAIConfig(){
+  return {
+    serverUrl:'http://localhost:8000',
+    provider:'owlv2',
+    models:{...PROVIDER_MODELS},
+    apiKeys:{openai:'', anthropic:'', gemini:''},
+    conf:0.1, dedupPx:25, connexions:'none', k:3, maxDist:null,
+    categories:{
+      porte:{prompts:['door'], couleur:'#e6194b', actif:true},
+      escalier:{prompts:['staircase','stairs'], couleur:'#3cb44b', actif:true},
+      sortie:{prompts:['exit sign','emergency exit'], couleur:'#4363d8', actif:true},
+      extincteur:{prompts:['fire extinguisher'], couleur:'#f58231', actif:true},
+    }
+  };
+}
+function loadAIConfig(){
+  const d=defaultAIConfig();
+  try{
+    const c=JSON.parse(localStorage.getItem(AI_KEY));
+    if(c&&c.categories){
+      return {...d, ...c,
+        models:{...d.models, ...(c.models||{})},
+        apiKeys:{...d.apiKeys, ...(c.apiKeys||{})}};
+    }
+  }catch(_){}
+  return d;
+}
+function saveAIConfig(cfg){ localStorage.setItem(AI_KEY, JSON.stringify(cfg)); }
+
+/* ------------------------------------------------------------------ *
+ *  Appel de l'IA : envoie l'image au serveur, applique la proposition *
+ * ------------------------------------------------------------------ */
+async function runAI(){
+  if(!state.imageDataURL){ toast('Importe d’abord une image'); return; }
+  const cfg=loadAIConfig();
+  const prov=cfg.provider||'owlv2';
+  const label=PROVIDER_LABELS[prov]||prov;
+  const cats={};
+  for(const [nom,c] of Object.entries(cfg.categories))
+    if(c.actif!==false && c.prompts && c.prompts.length) cats[nom]={prompts:c.prompts, couleur:c.couleur};
+  if(!Object.keys(cats).length){ toast('Active au moins une catégorie (⚙ Paramètres IA)'); return; }
+
+  const apiKey=(cfg.apiKeys&&cfg.apiKeys[prov])||'';
+  if(prov!=='owlv2' && !apiKey){ toast('Ajoute ta clé API '+label+' dans ⚙ Paramètres IA'); openAISettings(); return; }
+  if(state.annotations.length && !confirm('Remplacer les annotations actuelles par la proposition de l’IA ?')) return;
+
+  showAIOverlay(true, `Analyse IA en cours — ${label}…`);
+  try{
+    const url=cfg.serverUrl.replace(/\/+$/,'')+'/detect';
+    const res=await fetch(url,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ image:state.imageDataURL, nom_fichier:state.imageName,
+        provider:prov, api_key:apiKey, model:(cfg.models&&cfg.models[prov])||'',
+        conf:cfg.conf, dedup_px:cfg.dedupPx, connexions:cfg.connexions, k:cfg.k,
+        max_dist:cfg.maxDist, categories:cats })
+    });
+    if(!res.ok) throw new Error('HTTP '+res.status+' — '+(await res.text()).slice(0,220));
+    const data=await res.json();
+    applyGraph(data);
+    toast(`${label} : ${data.annotations.length} point(s), ${(data.connexions||[]).length} connexion(s) proposé(s)`);
+  }catch(err){
+    console.error(err);
+    alert('Échec de la proposition IA ('+label+') :\n'+err.message+
+          '\n\nLe serveur est-il lancé sur '+cfg.serverUrl+' ?\n  python server.py'+
+          (prov!=='owlv2' ? '\nLa clé API et le SDK ('+prov+') sont-ils corrects ?' : ''));
+    toast('Échec IA — voir la fenêtre d’alerte');
+  }finally{ showAIOverlay(false); }
+}
+function showAIOverlay(on, msg){
+  if(msg) $('aiOverlayMsg').textContent=msg;
+  $('aiOverlay').style.display = on?'flex':'none';
+}
+$('btnAI').onclick=runAI;
+
+/* ------------------------------------------------------------------ *
+ *  Page secondaire : réglages IA & prompts                           *
+ * ------------------------------------------------------------------ */
+let editModels={}, editKeys={}, cfgProv='owlv2';   // copies de travail pendant l'édition
+function openAISettings(){
+  const cfg=loadAIConfig();
+  editModels={...cfg.models}; editKeys={...cfg.apiKeys}; cfgProv=cfg.provider||'owlv2';
+  $('cfgUrl').value=cfg.serverUrl;
+  $('cfgProvider').value=cfgProv;
+  $('cfgModel').value=editModels[cfgProv]||'';
+  $('cfgApiKey').value=editKeys[cfgProv]||'';
+  $('cfgConf').value=cfg.conf;
+  $('cfgDedup').value=cfg.dedupPx;
+  $('cfgConnex').value=cfg.connexions;
+  $('cfgK').value=cfg.k;
+  $('cfgMaxDist').value=(cfg.maxDist==null?'':cfg.maxDist);
+  $('cfgCats').innerHTML='';
+  for(const [nom,c] of Object.entries(cfg.categories)) addCfgCatRow(nom,c);
+  updateProviderHints();
+  $('aiModal').style.display='flex';
+}
+function updateProviderHints(){
+  const p=$('cfgProvider').value;
+  $('cfgModel').placeholder=PROVIDER_MODELS[p]||'';
+  const key=$('cfgApiKey');
+  key.disabled=(p==='owlv2');
+  key.placeholder = p==='owlv2' ? 'non requise pour OWLv2' : 'colle ta clé API '+(PROVIDER_LABELS[p]||p);
+}
+$('cfgProvider').onchange=()=>{
+  editModels[cfgProv]=$('cfgModel').value.trim();   // mémorise l'ancien fournisseur
+  editKeys[cfgProv]=$('cfgApiKey').value;
+  cfgProv=$('cfgProvider').value;
+  $('cfgModel').value=editModels[cfgProv]||'';
+  $('cfgApiKey').value=editKeys[cfgProv]||'';
+  updateProviderHints();
+};
+function closeAISettings(){ $('aiModal').style.display='none'; }
+function addCfgCatRow(nom,c){
+  c=c||{prompts:[], couleur:'#3454d1', actif:true};
+  const tr=document.createElement('tr');
+  tr.innerHTML=`
+    <td style="text-align:center"><input type="checkbox" class="c-act" ${c.actif!==false?'checked':''}></td>
+    <td><input type="text" class="c-nom" value="${(nom||'').replace(/"/g,'&quot;')}"></td>
+    <td><input type="text" class="c-prompts" value="${(c.prompts||[]).join(', ').replace(/"/g,'&quot;')}"></td>
+    <td><input type="color" class="c-col" value="${c.couleur||'#3454d1'}"></td>
+    <td><button class="del c-del" title="Retirer">✕</button></td>`;
+  tr.querySelector('.c-del').onclick=()=>tr.remove();
+  $('cfgCats').appendChild(tr);
+}
+function collectAIConfig(){
+  const cfg=loadAIConfig();
+  editModels[cfgProv]=$('cfgModel').value.trim();       // fige le fournisseur affiché
+  editKeys[cfgProv]=$('cfgApiKey').value;
+  cfg.serverUrl=$('cfgUrl').value.trim()||'http://localhost:8000';
+  cfg.provider=$('cfgProvider').value;
+  cfg.models=editModels;
+  cfg.apiKeys=editKeys;
+  cfg.conf=parseFloat($('cfgConf').value); if(isNaN(cfg.conf)) cfg.conf=0.1;
+  cfg.dedupPx=parseFloat($('cfgDedup').value); if(isNaN(cfg.dedupPx)) cfg.dedupPx=25;
+  cfg.connexions=$('cfgConnex').value;
+  cfg.k=parseInt($('cfgK').value,10)||3;
+  const md=$('cfgMaxDist').value.trim();
+  cfg.maxDist = md===''?null:(parseFloat(md)||null);
+  const cats={};
+  for(const tr of $('cfgCats').querySelectorAll('tr')){
+    const nom=tr.querySelector('.c-nom').value.trim().toLowerCase();
+    if(!nom) continue;
+    cats[nom]={
+      prompts:tr.querySelector('.c-prompts').value.split(',').map(s=>s.trim()).filter(Boolean),
+      couleur:tr.querySelector('.c-col').value,
+      actif:tr.querySelector('.c-act').checked
+    };
+  }
+  cfg.categories=cats;
+  return cfg;
+}
+$('btnAISettings').onclick=openAISettings;
+$('aiClose').onclick=closeAISettings;
+$('cfgCancel').onclick=closeAISettings;
+$('cfgAddCat').onclick=()=>addCfgCatRow('',null);
+$('cfgReset').onclick=()=>{ if(confirm('Réinitialiser les paramètres IA par défaut ?')){ saveAIConfig(defaultAIConfig()); openAISettings(); toast('Paramètres réinitialisés'); } };
+$('cfgSave').onclick=()=>{ saveAIConfig(collectAIConfig()); closeAISettings(); toast('Paramètres IA enregistrés'); };
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && $('aiModal').style.display==='flex') closeAISettings(); });
+
+/* Rendu initial des légendes */
+renderCats(); renderEdgeCats();
+</script>
+</body>
+</html>
