@@ -165,6 +165,7 @@ export default function NavigationPage() {
   const supabase = useMemo(() => createClient(), []);
 
   const [mapZoom, setMapZoom] = useState(1);
+  const [zoomOrigin, setZoomOrigin] = useState({ x: 50, y: 50 });
 
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [buildings, setBuildings] = useState<Building[]>([]);
@@ -893,28 +894,24 @@ export default function NavigationPage() {
               <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900 p-1">
                 <button
                   type="button"
-                  onClick={() => setMapZoom((zoom) => Math.max(0.75, zoom - 0.25))}
-                  className="rounded-xl px-3 py-2 text-sm hover:bg-white/10"
-                >
-                  −
-                </button>
-
-                <span className="min-w-14 text-center text-xs text-slate-300">
-                  {Math.round(mapZoom * 100)}%
-                </span>
-
-                <button
-                  type="button"
-                  onClick={() => setMapZoom((zoom) => Math.min(3, zoom + 0.25))}
-                  className="rounded-xl px-3 py-2 text-sm hover:bg-white/10"
+                  onClick={() => setMapZoom((z) => Math.min(z + 0.25, 3))}
                 >
                   +
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setMapZoom(1)}
-                  className="rounded-xl px-3 py-2 text-xs text-slate-400 hover:bg-white/10"
+                  onClick={() => setMapZoom((z) => Math.max(z - 0.25, 1))}
+                >
+                  -
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMapZoom(1);
+                    setZoomOrigin({ x: 50, y: 50 });
+                  }}
                 >
                   Reset
                 </button>
@@ -986,54 +983,64 @@ export default function NavigationPage() {
                       />
                     ) : (
                       <div className="w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-950/70">
-                        <div className="relative w-full">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={floorSignedUrl}
-                            alt={floor ? `Plan de ${floor.name}` : "Plan accessible"}
-                            className="block h-auto w-full select-none"
-                            draggable={false}
-                          />
-
-                          <svg
-                            className="pointer-events-none absolute inset-0 h-full w-full"
-                            viewBox="0 0 100 100"
-                            preserveAspectRatio="none"
+                        {/* Viewport: este tamaño NO cambia */}
+                        <div className="relative w-full overflow-hidden">
+                          {/* Capa interna: esta sí hace zoom */}
+                          <div
+                            className="relative w-full origin-top-left"
+                            style={{
+                              transform: `scale(${mapZoom})`,
+                              transformOrigin: `${zoomOrigin.x}% ${zoomOrigin.y}%`,
+                            }}
                           >
-                            {floorEdges.map((edge) => {
-                              const from = getElementById(edge.from_element_id);
-                              const to = getElementById(edge.to_element_id);
-
-                              if (!from || !to) return null;
-
-                              const isAllowed = isEdgeAllowed(edge, mobilityProfile);
-                              const isInRoute = routeEdgeIds.has(edge.id);
-
-                              return (
-                                <line
-                                  key={edge.id}
-                                  x1={from.x}
-                                  y1={from.y}
-                                  x2={to.x}
-                                  y2={to.y}
-                                  stroke={isInRoute ? "#22c55e" : isAllowed ? "#38bdf8" : "#ef4444"}
-                                  strokeWidth={isInRoute ? 1.6 : 0.8}
-                                  strokeDasharray={isAllowed ? undefined : "2 2"}
-                                  vectorEffect="non-scaling-stroke"
-                                  opacity={isInRoute ? 1 : 0.55}
-                                />
-                              );
-                            })}
-                          </svg>
-
-                          {floorElements.map((element, index) => (
-                            <MapMarker
-                              key={element.id}
-                              element={element}
-                              index={index + 1}
-                              highlighted={routeNodeIds.has(element.id)}
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={floorSignedUrl}
+                              alt={floor ? `Plan de ${floor.name}` : "Plan accessible"}
+                              className="block h-auto w-full select-none"
+                              draggable={false}
                             />
-                          ))}
+
+                            <svg
+                              className="pointer-events-none absolute inset-0 h-full w-full"
+                              viewBox="0 0 100 100"
+                              preserveAspectRatio="none"
+                            >
+                              {floorEdges.map((edge) => {
+                                const from = getElementById(edge.from_element_id);
+                                const to = getElementById(edge.to_element_id);
+
+                                if (!from || !to) return null;
+
+                                const isAllowed = isEdgeAllowed(edge, mobilityProfile);
+                                const isInRoute = routeEdgeIds.has(edge.id);
+
+                                return (
+                                  <line
+                                    key={edge.id}
+                                    x1={from.x}
+                                    y1={from.y}
+                                    x2={to.x}
+                                    y2={to.y}
+                                    stroke={isInRoute ? "#22c55e" : isAllowed ? "#38bdf8" : "#ef4444"}
+                                    strokeWidth={isInRoute ? 1.6 : 0.8}
+                                    strokeDasharray={isAllowed ? undefined : "2 2"}
+                                    vectorEffect="non-scaling-stroke"
+                                    opacity={isInRoute ? 1 : 0.55}
+                                  />
+                                );
+                              })}
+                            </svg>
+
+                            {floorElements.map((element, index) => (
+                              <MapMarker
+                                key={element.id}
+                                element={element}
+                                index={index + 1}
+                                highlighted={routeNodeIds.has(element.id)}
+                              />
+                            ))}
+                          </div>
                         </div>
                       </div>
                     )}
