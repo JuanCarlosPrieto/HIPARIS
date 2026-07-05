@@ -647,7 +647,13 @@ export default function NavigationPage() {
   }
 
   function getElementsForFloor(floorId: string) {
-    return elements.filter((element) => element.floor_id === floorId);
+    const floorElements = elements.filter((element) => element.floor_id === floorId);
+
+    if (!routeResult) {
+      return floorElements;
+    }
+
+    return floorElements.filter((element) => routeNodeIds.has(element.id));
   }
 
   function getEdgesForFloor(floorId: string) {
@@ -657,7 +663,16 @@ export default function NavigationPage() {
 
       if (!from || !to) return false;
 
-      return from.floor_id === floorId && to.floor_id === floorId;
+      const isSameFloorEdge =
+        from.floor_id === floorId && to.floor_id === floorId;
+
+      if (!isSameFloorEdge) return false;
+
+      if (!routeResult) {
+        return true;
+      }
+
+      return routeEdgeIds.has(edge.id);
     });
   }
 

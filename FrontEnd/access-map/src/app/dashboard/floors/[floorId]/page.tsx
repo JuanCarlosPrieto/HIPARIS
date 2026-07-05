@@ -199,6 +199,9 @@ export default function FloorReviewPage() {
   const [selectedType, setSelectedType] = useState<ElementType>("entrance");
   const [label, setLabel] = useState("");
 
+  const [elementDescription, setElementDescription] = useState("");
+  const [verticalConnectionKey, setVerticalConnectionKey] = useState("");
+
   const [aiProposal, setAiProposal] = useState<AIPlanProposal | null>(null);
   const [ignoredAIElementIds, setIgnoredAIElementIds] = useState<Set<string>>(
     () => new Set()
@@ -535,6 +538,11 @@ export default function FloorReviewPage() {
           source: "manual",
           wheelchair_relevant: true,
           created_in: "floor_review_page",
+          description: elementDescription.trim() || null,
+          vertical_connection_key:
+            ["elevator", "ramp", "stairs"].includes(selectedType)
+              ? verticalConnectionKey.trim() || finalLabel
+              : null,
         },
       })
       .select("*")
@@ -549,6 +557,8 @@ export default function FloorReviewPage() {
 
     setElements((current) => [...current, data as AccessibleElement]);
     setLabel("");
+    setElementDescription("");
+    setVerticalConnectionKey("");
     setInfoMessage("Élément ajouté au plan.");
   }
 
@@ -992,6 +1002,21 @@ export default function FloorReviewPage() {
               className="mt-4 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm outline-none focus:border-cyan-300"
               placeholder="Libellé: Ascenseur A, Salle 104..."
             />
+            <textarea
+              value={elementDescription}
+              onChange={(event) => setElementDescription(event.target.value)}
+              className="mt-3 min-h-24 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm outline-none focus:border-cyan-300"
+              placeholder="Description utile: entrée côté cour, ascenseur principal près de l'accueil, salle au fond du couloir..."
+            />
+
+            {["elevator", "ramp", "stairs"].includes(selectedType) && (
+              <input
+                value={verticalConnectionKey}
+                onChange={(event) => setVerticalConnectionKey(event.target.value)}
+                className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm outline-none focus:border-cyan-300"
+                placeholder="Code inter-étages: ascenseur-a, rampe-nord, escalier-principal..."
+              />
+            )}
           </Panel>
 
           <Panel title="2. Créer une connexion" subtitle="Déclarez qu'un chemin existe entre deux points.">
