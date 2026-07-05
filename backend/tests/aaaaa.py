@@ -26,7 +26,7 @@ with open("test.png", "rb") as f:
     image_bytes = f.read()
 
 response = client.models.generate_content(
-    model="gemini-3.5-flash",
+    model="gemini-2.5-flash",
     contents=[
         types.Content(
             role="user",

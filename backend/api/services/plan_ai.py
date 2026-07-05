@@ -275,7 +275,7 @@ def analyze_plan_image(
     if mime_type not in {"image/jpeg", "image/png", "image/webp"}:
         raise PlanAIError(f"Unsupported image type: {mime_type}")
 
-    model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
+    model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     client = _get_client()
 
     prompt = f"""
