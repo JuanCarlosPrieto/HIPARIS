@@ -251,11 +251,339 @@ data = {
   ]
 }
 
+data = {
+  "nodes": [
+    {
+      "id": 1,
+      "name": "Local Déchets (L. DECHETS)",
+      "x": 118,
+      "y": 698
+    },
+    {
+      "id": 2,
+      "name": "Monte-charge (MC - Bas Gauche)",
+      "x": 185,
+      "y": 710
+    },
+    {
+      "id": 3,
+      "name": "Accueil",
+      "x": 175,
+      "y": 763
+    },
+    {
+      "id": 4,
+      "name": "Ascenseurs (Double ASC - Bas Gauche)",
+      "x": 258,
+      "y": 773
+    },
+    {
+      "id": 5,
+      "name": "Cafétéria",
+      "x": 285,
+      "y": 605
+    },
+    {
+      "id": 6,
+      "name": "Sanitaire Haut-Gauche 1 (SANIT.)",
+      "x": 183,
+      "y": 513
+    },
+    {
+      "id": 7,
+      "name": "Sanitaire Haut-Gauche 2 (SANIT.)",
+      "x": 183,
+      "y": 553
+    },
+    {
+      "id": 8,
+      "name": "Local Technique (L.T.)",
+      "x": 245,
+      "y": 475
+    },
+    {
+      "id": 9,
+      "name": "Dégagement (DF - Haut Gauche 1)",
+      "x": 280,
+      "y": 475
+    },
+    {
+      "id": 10,
+      "name": "Dégagement (DF - Haut Gauche 2)",
+      "x": 280,
+      "y": 540
+    },
+    {
+      "id": 11,
+      "name": "Couloir Accueil",
+      "x": 215,
+      "y": 713
+    },
+    {
+      "id": 12,
+      "name": "Couloir Centre-Gauche (liaison Cafétéria)",
+      "x": 220,
+      "y": 600
+    },
+    {
+      "id": 13,
+      "name": "Couloir Liaison (Bas-Milieu)",
+      "x": 360,
+      "y": 685
+    },
+    {
+      "id": 14,
+      "name": "Couloir Centre-Droit",
+      "x": 505,
+      "y": 600
+    },
+    {
+      "id": 15,
+      "name": "Ascenseurs (Double ASC - Centre)",
+      "x": 558,
+      "y": 620
+    },
+    {
+      "id": 16,
+      "name": "Sanitaire Centre-Droit (SANIT.)",
+      "x": 555,
+      "y": 690
+    },
+    {
+      "id": 17,
+      "name": "Dégagement (DF - Centre Droit)",
+      "x": 600,
+      "y": 610
+    },
+    {
+      "id": 18,
+      "name": "Cuisines",
+      "x": 575,
+      "y": 485
+    },
+    {
+      "id": 19,
+      "name": "Monte-charge Double (MC MC - Cuisine)",
+      "x": 572,
+      "y": 445
+    },
+    {
+      "id": 20,
+      "name": "Couloir Haut-Droit (Axe de circulation)",
+      "x": 560,
+      "y": 405
+    },
+    {
+      "id": 21,
+      "name": "Monte-charge (MC - Haut Droit)",
+      "x": 605,
+      "y": 375
+    },
+    {
+      "id": 22,
+      "name": "Dégagement (DF - Milieu Haut)",
+      "x": 480,
+      "y": 355
+    },
+    {
+      "id": 23,
+      "name": "Sanitaires Vestiaires 1 (SANIT.)",
+      "x": 525,
+      "y": 350
+    },
+    {
+      "id": 24,
+      "name": "Sanitaires Vestiaires 2 (SANIT.)",
+      "x": 535,
+      "y": 335
+    },
+    {
+      "id": 25,
+      "name": "Vestiaire Hommes (VEST. H.)",
+      "x": 555,
+      "y": 350
+    },
+    {
+      "id": 26,
+      "name": "Vestiaire Femmes (VEST. F.)",
+      "x": 560,
+      "y": 335
+    },
+    {
+      "id": 27,
+      "name": "Chambre Froide 1 (CH. F.)",
+      "x": 565,
+      "y": 320
+    },
+    {
+      "id": 28,
+      "name": "Chambre Froide 2 (CH. F.)",
+      "x": 580,
+      "y": 290
+    },
+    {
+      "id": 29,
+      "name": "Chambre Froide 3 (CH. F.)",
+      "x": 605,
+      "y": 350
+    },
+    {
+      "id": 30,
+      "name": "Local Poubelles (L. POUB.)",
+      "x": 610,
+      "y": 310
+    },
+    {
+      "id": 31,
+      "name": "Nacelle",
+      "x": 610,
+      "y": 275
+    },
+    {
+      "id": 32,
+      "name": "Livraisons",
+      "x": 620,
+      "y": 250
+    }
+  ],
+  "edges": [
+    {
+      "source": 1,
+      "target": 11
+    },
+    {
+      "source": 2,
+      "target": 11
+    },
+    {
+      "source": 3,
+      "target": 11
+    },
+    {
+      "source": 4,
+      "target": 11
+    },
+    {
+      "source": 11,
+      "target": 13
+    },
+    {
+      "source": 11,
+      "target": 12
+    },
+    {
+      "source": 12,
+      "target": 5
+    },
+    {
+      "source": 12,
+      "target": 6
+    },
+    {
+      "source": 12,
+      "target": 7
+    },
+    {
+      "source": 12,
+      "target": 8
+    },
+    {
+      "source": 12,
+      "target": 9
+    },
+    {
+      "source": 12,
+      "target": 10
+    },
+    {
+      "source": 13,
+      "target": 14
+    },
+    {
+      "source": 14,
+      "target": 15
+    },
+    {
+      "source": 14,
+      "target": 16
+    },
+    {
+      "source": 14,
+      "target": 17
+    },
+    {
+      "source": 14,
+      "target": 18
+    },
+    {
+      "source": 14,
+      "target": 20
+    },
+    {
+      "source": 18,
+      "target": 19
+    },
+    {
+      "source": 20,
+      "target": 21
+    },
+    {
+      "source": 20,
+      "target": 22
+    },
+    {
+      "source": 20,
+      "target": 23
+    },
+    {
+      "source": 20,
+      "target": 24
+    },
+    {
+      "source": 20,
+      "target": 25
+    },
+    {
+      "source": 20,
+      "target": 26
+    },
+    {
+      "source": 20,
+      "target": 27
+    },
+    {
+      "source": 20,
+      "target": 28
+    },
+    {
+      "source": 20,
+      "target": 29
+    },
+    {
+      "source": 20,
+      "target": 30
+    },
+    {
+      "source": 20,
+      "target": 31
+    },
+    {
+      "source": 31,
+      "target": 32
+    }
+  ]
+}
 # index des nodes par id
 nodes = {n["id"]: n for n in data["nodes"]}
 
 # --- charger l'image de fond ---
 img = mpimg.imread("test.png")
+
+width = img.shape[1]/1000
+height = img.shape[0]/1000
+for e in data["nodes"]:
+    e["x"] = e["x"]*width
+    e["y"] = e["y"]*height
 
 fig, ax = plt.subplots()
 
@@ -263,13 +591,14 @@ fig, ax = plt.subplots()
 ax.imshow(img)
 
 # --- dessiner les liens ---
+mult = 1
 for e in data["edges"]:
     n1 = nodes[e["source"]]
     n2 = nodes[e["target"]]
 
     ax.plot(
-        [n1["x"], n2["x"]],
-        [n1["y"], n2["y"]],
+        [n1["x"]*mult, n2["x"]*mult],
+        [n1["y"]*mult, n2["y"]*mult],
         color="yellow",
         linewidth=2,
         alpha=0.8
@@ -277,7 +606,7 @@ for e in data["edges"]:
 
 # --- dessiner les nodes ---
 for n in data["nodes"]:
-    x, y = n["x"], n["y"]
+    x, y = n["x"]*mult, n["y"]*mult
 
     # point
     ax.scatter(x, y, s=60, c="red")
