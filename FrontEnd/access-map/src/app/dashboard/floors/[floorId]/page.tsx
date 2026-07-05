@@ -200,6 +200,12 @@ export default function FloorReviewPage() {
   const [label, setLabel] = useState("");
 
   const [aiProposal, setAiProposal] = useState<AIPlanProposal | null>(null);
+  const [ignoredAIElementIds, setIgnoredAIElementIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [ignoredAIEdgeIds, setIgnoredAIEdgeIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const [analyzingPlan, setAnalyzingPlan] = useState(false);
   const [savingAIProposal, setSavingAIProposal] = useState(false);
 
@@ -249,6 +255,91 @@ export default function FloorReviewPage() {
       to,
     });
   }, [floor, elements, fromElementId, toElementId]);
+
+  const acceptedAIElements = useMemo(() => {
+    if (!aiProposal) return [];
+
+    return aiProposal.elements.filter(
+      (element) => !ignoredAIElementIds.has(element.temp_id)
+    );
+  }, [aiProposal, ignoredAIElementIds]);
+
+  const acceptedAIEdges = useMemo(() => {
+    if (!aiProposal) return [];
+
+    return aiProposal.edges.filter((edge, index) => {
+      const edgeId = getAIEdgeId(edge, index);
+
+      const edgeWasIgnored = ignoredAIEdgeIds.has(edgeId);
+      const fromWasIgnored = ignoredAIElementIds.has(edge.from_temp_id);
+      const toWasIgnored = ignoredAIElementIds.has(edge.to_temp_id);
+
+      return !edgeWasIgnored && !fromWasIgnored && !toWasIgnored;
+    });
+  }, [aiProposal, ignoredAIElementIds, ignoredAIEdgeIds]);
+
+  function getAIEdgeId(edge: AIEdgeProposal, index: number) {
+    return `${edge.from_temp_id}-${edge.to_temp_id}-${edge.edge_type}-${index}`;
+  }
+
+  function ignoreAIElement(tempId: string) {
+    setIgnoredAIElementIds((current) => {
+      const next = new Set(current);
+      next.add(tempId);
+      return next;
+    });
+  }
+
+  function restoreAIElement(tempId: string) {
+    setIgnoredAIElementIds((current) => {
+      const next = new Set(current);
+      next.delete(tempId);
+      return next;
+    });
+  }
+
+  function ignoreAIEdge(edge: AIEdgeProposal, index: number) {
+    const edgeId = getAIEdgeId(edge, index);
+
+    setIgnoredAIEdgeIds((current) => {
+      const next = new Set(current);
+      next.add(edgeId);
+      return next;
+    });
+  }
+
+  function restoreAIEdge(edge: AIEdgeProposal, index: number) {
+    const edgeId = getAIEdgeId(edge, index);
+
+    setIgnoredAIEdgeIds((current) => {
+      const next = new Set(current);
+      next.delete(edgeId);
+      return next;
+    });
+  }
+
+  function acceptAllAIProposal() {
+    setIgnoredAIElementIds(new Set());
+    setIgnoredAIEdgeIds(new Set());
+  }
+
+  function rejectAllAIProposal() {
+    if (!aiProposal) return;
+
+    setIgnoredAIElementIds(
+      new Set(aiProposal.elements.map((element) => element.temp_id))
+    );
+
+    setIgnoredAIEdgeIds(
+      new Set(aiProposal.edges.map((edge, index) => getAIEdgeId(edge, index)))
+    );
+  }
+
+  function clearAIProposal() {
+    setAiProposal(null);
+    setIgnoredAIElementIds(new Set());
+    setIgnoredAIEdgeIds(new Set());
+  }
 
   useEffect(() => {
     async function initialize() {
@@ -667,13 +758,10 @@ export default function FloorReviewPage() {
 
       const proposal = filterAIProposalInsideBounds(rawProposal);
 
-      setAiProposal(proposal);
-      setInfoMessage(
-        `Analyse IA terminée : ${proposal.elements.length} points et ${proposal.edges.length} connexions proposés.`
-      );
+      setIgnoredAIElementIds(new Set());
+      setIgnoredAIEdgeIds(new Set());
 
       setAiProposal(proposal);
-
       setInfoMessage(
         `Analyse IA terminée : ${proposal.elements.length} points et ${proposal.edges.length} connexions proposés.`
       );
@@ -688,8 +776,8 @@ export default function FloorReviewPage() {
   async function handleSaveAIProposal() {
     if (!floor || !aiProposal) return;
 
-    if (aiProposal.elements.length === 0) {
-      setErrorMessage("La proposition IA ne contient aucun point à sauvegarder.");
+    if (acceptedAIElements.length === 0) {
+      setErrorMessage("Aucun point IA accepté à sauvegarder.");
       return;
     }
 
@@ -698,7 +786,7 @@ export default function FloorReviewPage() {
     setInfoMessage(null);
 
     try {
-      const elementRows = aiProposal.elements.map((element) => ({
+      const elementRows = acceptedAIElements.map((element) => ({
         floor_id: floor.id,
         type: mapAIElementTypeToElementType(element.type),
         label: getAIElementLabel(element),
@@ -736,8 +824,8 @@ export default function FloorReviewPage() {
         }
       }
 
-      const edgeRows = aiProposal.edges
-        .map((edge) => {
+      const edgeRows = acceptedAIEdges
+            .map((edge) => {
           const from = savedByTempId.get(edge.from_temp_id);
           const to = savedByTempId.get(edge.to_temp_id);
 
@@ -796,10 +884,10 @@ export default function FloorReviewPage() {
       }
 
       setElements((current) => [...current, ...savedElements]);
-      setAiProposal(null);
+      clearAIProposal();
 
       setInfoMessage(
-        `Proposition IA sauvegardée : ${savedElements.length} points et ${edgeRows.length} connexions ajoutés. Vérifiez avant publication.`
+        `Proposition IA validée : ${savedElements.length} points et ${edgeRows.length} connexions ajoutés. Vérifiez les données avant publication.`
       );
     } catch (error) {
       console.error("Erreur sauvegarde proposition IA:", error);
@@ -1103,7 +1191,7 @@ export default function FloorReviewPage() {
                     />
                   )}
 
-                  {aiProposal?.edges.map((edge, index) => {
+                  {acceptedAIEdges.map((edge, index) => {
                     const from = aiProposal.elements.find(
                       (element) => element.temp_id === edge.from_temp_id
                     );
@@ -1139,7 +1227,7 @@ export default function FloorReviewPage() {
                     />
                   ))}
 
-                  {aiProposal?.elements.map((element, index) => (
+                  {acceptedAIElements.map((element, index) => (
                     <AIMapMarker
                       key={element.temp_id}
                       element={element}
@@ -1161,75 +1249,236 @@ export default function FloorReviewPage() {
 
         <aside className="space-y-6">
           {aiProposal && (
-          <Panel
-            title="Proposition IA"
-            subtitle="Ces points et connexions doivent être vérifiés avant publication."
-          >
-            <div className="space-y-4">
-              {aiProposal.warnings.length > 0 && (
-                <div className="rounded-2xl border border-amber-300/30 bg-amber-300/10 p-4 text-xs leading-5 text-amber-100">
-                  {aiProposal.warnings.map((warning, index) => (
-                    <p key={index}>• {warning}</p>
-                  ))}
-                </div>
-              )}
-
-              <div className="rounded-2xl bg-white/[0.04] p-4 text-sm leading-6 text-slate-300">
-                <p>
-                  Points proposés :{" "}
-                  <span className="text-slate-100">{aiProposal.elements.length}</span>
-                </p>
-                <p>
-                  Connexions proposées :{" "}
-                  <span className="text-slate-100">{aiProposal.edges.length}</span>
-                </p>
-              </div>
-
-              <div className="max-h-56 space-y-2 overflow-auto pr-1">
-                {aiProposal.elements.map((element, index) => (
-                  <div
-                    key={element.temp_id}
-                    className="rounded-xl border border-amber-300/20 bg-amber-300/10 p-3 text-xs"
-                  >
-                    <p className="font-medium text-amber-100">
-                      IA{index + 1} · {getAIElementLabel(element)}
-                    </p>
-                    <p className="mt-1 text-slate-400">
-                      Type : {element.type} · confiance :{" "}
-                      {(element.confidence * 100).toFixed(0)}%
-                    </p>
-                    {element.notes && (
-                      <p className="mt-1 text-slate-500">{element.notes}</p>
-                    )}
+            <Panel
+              title="Proposition IA"
+              subtitle="Acceptez uniquement les éléments fiables avant de les sauvegarder."
+            >
+              <div className="space-y-4">
+                {aiProposal.warnings.length > 0 && (
+                  <div className="rounded-2xl border border-amber-300/30 bg-amber-300/10 p-4 text-xs leading-5 text-amber-100">
+                    {aiProposal.warnings.map((warning, index) => (
+                      <p key={index}>• {warning}</p>
+                    ))}
                   </div>
-                ))}
-              </div>
-
-              <button
-                type="button"
-                onClick={handleSaveAIProposal}
-                disabled={savingAIProposal}
-                className="flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-300 px-4 py-3 font-medium text-slate-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {savingAIProposal ? (
-                  <Loader2 className="animate-spin" size={18} />
-                ) : (
-                  <Save size={18} />
                 )}
-                Sauvegarder la proposition
-              </button>
 
-              <button
-                type="button"
-                onClick={() => setAiProposal(null)}
-                disabled={savingAIProposal}
-                className="w-full rounded-2xl border border-white/10 px-4 py-3 text-sm text-slate-300 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                Ignorer la proposition
-              </button>
-            </div>
-          </Panel>
-        )}
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div className="rounded-2xl bg-white/[0.04] p-4">
+                    <p className="text-slate-400">Points acceptés</p>
+                    <p className="mt-1 text-2xl font-semibold text-slate-100">
+                      {acceptedAIElements.length}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      sur {aiProposal.elements.length} proposés
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white/[0.04] p-4">
+                    <p className="text-slate-400">Connexions acceptées</p>
+                    <p className="mt-1 text-2xl font-semibold text-slate-100">
+                      {acceptedAIEdges.length}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      sur {aiProposal.edges.length} proposées
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={acceptAllAIProposal}
+                    disabled={savingAIProposal}
+                    className="flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <CheckCircle2 size={16} />
+                    Tout accepter
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={rejectAllAIProposal}
+                    disabled={savingAIProposal}
+                    className="flex items-center justify-center gap-2 rounded-2xl border border-red-300/30 bg-red-400/10 px-4 py-3 text-sm font-medium text-red-100 hover:bg-red-400/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Trash2 size={16} />
+                    Tout rejeter
+                  </button>
+                </div>
+
+                <div>
+                  <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
+                    Points proposés
+                  </p>
+
+                  <div className="max-h-64 space-y-2 overflow-auto pr-1">
+                    {aiProposal.elements.map((element, index) => {
+                      const ignored = ignoredAIElementIds.has(element.temp_id);
+
+                      return (
+                        <div
+                          key={element.temp_id}
+                          className={`rounded-xl border p-3 text-xs ${
+                            ignored
+                              ? "border-red-300/20 bg-red-400/5 opacity-60"
+                              : "border-amber-300/20 bg-amber-300/10"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-medium text-amber-100">
+                                IA{index + 1} · {getAIElementLabel(element)}
+                              </p>
+
+                              <p className="mt-1 text-slate-400">
+                                Type : {element.type} · confiance :{" "}
+                                {(element.confidence * 100).toFixed(0)}%
+                              </p>
+
+                              <p className="mt-1 text-slate-500">
+                                x={clamp01(element.x).toFixed(3)}, y=
+                                {clamp01(element.y).toFixed(3)}
+                              </p>
+
+                              {element.notes && (
+                                <p className="mt-1 text-slate-500">{element.notes}</p>
+                              )}
+
+                              {ignored && (
+                                <p className="mt-2 text-red-200">
+                                  Ce point sera ignoré.
+                                </p>
+                              )}
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                ignored
+                                  ? restoreAIElement(element.temp_id)
+                                  : ignoreAIElement(element.temp_id)
+                              }
+                              disabled={savingAIProposal}
+                              className={`shrink-0 rounded-xl px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+                                ignored
+                                  ? "bg-emerald-400/10 text-emerald-100 hover:bg-emerald-400/15"
+                                  : "bg-red-400/10 text-red-100 hover:bg-red-400/15"
+                              }`}
+                            >
+                              {ignored ? "Restaurer" : "Rejeter"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {aiProposal.edges.length > 0 && (
+                  <div>
+                    <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-500">
+                      Connexions proposées
+                    </p>
+
+                    <div className="max-h-56 space-y-2 overflow-auto pr-1">
+                      {aiProposal.edges.map((edge, index) => {
+                        const ignored = ignoredAIEdgeIds.has(getAIEdgeId(edge, index));
+                        const fromIgnored = ignoredAIElementIds.has(edge.from_temp_id);
+                        const toIgnored = ignoredAIElementIds.has(edge.to_temp_id);
+                        const disabledByElement = fromIgnored || toIgnored;
+
+                        return (
+                          <div
+                            key={getAIEdgeId(edge, index)}
+                            className={`rounded-xl border p-3 text-xs ${
+                              ignored || disabledByElement
+                                ? "border-red-300/20 bg-red-400/5 opacity-60"
+                                : "border-cyan-300/20 bg-cyan-300/10"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-medium text-cyan-100">
+                                  Connexion IA{index + 1}
+                                </p>
+
+                                <p className="mt-1 text-slate-400">
+                                  {edge.from_temp_id} → {edge.to_temp_id}
+                                </p>
+
+                                <p className="mt-1 text-slate-500">
+                                  Type : {edge.edge_type} · confiance :{" "}
+                                  {(edge.confidence * 100).toFixed(0)}%
+                                </p>
+
+                                {edge.notes && (
+                                  <p className="mt-1 text-slate-500">{edge.notes}</p>
+                                )}
+
+                                {disabledByElement && (
+                                  <p className="mt-2 text-red-200">
+                                    Connexion ignorée car un point lié a été rejeté.
+                                  </p>
+                                )}
+
+                                {ignored && !disabledByElement && (
+                                  <p className="mt-2 text-red-200">
+                                    Cette connexion sera ignorée.
+                                  </p>
+                                )}
+                              </div>
+
+                              {!disabledByElement && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    ignored
+                                      ? restoreAIEdge(edge, index)
+                                      : ignoreAIEdge(edge, index)
+                                  }
+                                  disabled={savingAIProposal}
+                                  className={`shrink-0 rounded-xl px-3 py-2 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    ignored
+                                      ? "bg-emerald-400/10 text-emerald-100 hover:bg-emerald-400/15"
+                                      : "bg-red-400/10 text-red-100 hover:bg-red-400/15"
+                                  }`}
+                                >
+                                  {ignored ? "Restaurer" : "Rejeter"}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleSaveAIProposal}
+                  disabled={savingAIProposal || acceptedAIElements.length === 0}
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl bg-amber-300 px-4 py-3 font-medium text-slate-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingAIProposal ? (
+                    <Loader2 className="animate-spin" size={18} />
+                  ) : (
+                    <Save size={18} />
+                  )}
+                  Sauvegarder uniquement les éléments acceptés
+                </button>
+
+                <button
+                  type="button"
+                  onClick={clearAIProposal}
+                  disabled={savingAIProposal}
+                  className="w-full rounded-2xl border border-white/10 px-4 py-3 text-sm text-slate-300 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Fermer la proposition IA
+                </button>
+              </div>
+            </Panel>
+          )}
           <Panel title="Points du plan" subtitle="Éléments accessibles et obstacles.">
             {elements.length === 0 ? (
               <EmptyState
