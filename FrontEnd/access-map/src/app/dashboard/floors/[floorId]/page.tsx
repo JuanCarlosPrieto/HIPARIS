@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   analyzePlanWithAI,
@@ -211,6 +211,7 @@ export default function FloorReviewPage() {
   );
   const [analyzingPlan, setAnalyzingPlan] = useState(false);
   const [savingAIProposal, setSavingAIProposal] = useState(false);
+  const aiSaveInFlightRef = useRef(false);
 
   const [fromElementId, setFromElementId] = useState("");
   const [toElementId, setToElementId] = useState("");
@@ -784,19 +785,52 @@ export default function FloorReviewPage() {
   }
 
   async function handleSaveAIProposal() {
-    if (!floor || !aiProposal) return;
+  if (aiSaveInFlightRef.current) return;
+  if (!floor || !aiProposal) return;
 
-    if (acceptedAIElements.length === 0) {
-      setErrorMessage("Aucun point IA accepté à sauvegarder.");
-      return;
+  const selectedAIElements = acceptedAIElements;
+  const selectedAIEdges = acceptedAIEdges;
+
+  if (selectedAIElements.length === 0) {
+    setErrorMessage("Aucun point IA accepté à sauvegarder.");
+    return;
+  }
+
+  aiSaveInFlightRef.current = true;
+  setSavingAIProposal(true);
+  setErrorMessage(null);
+  setInfoMessage(null);
+
+  try {
+    const { data: existingElementData, error: existingElementsError } =
+      await supabase
+        .from("accessible_elements")
+        .select("*")
+        .eq("floor_id", floor.id);
+
+    if (existingElementsError) {
+      throw existingElementsError;
     }
 
-    setSavingAIProposal(true);
-    setErrorMessage(null);
-    setInfoMessage(null);
+    const existingElements = (existingElementData ?? []) as AccessibleElement[];
 
-    try {
-      const elementRows = acceptedAIElements.map((element) => ({
+    const savedByTempId = new Map<string, AccessibleElement>();
+
+    for (const existingElement of existingElements) {
+      const tempId = getAIElementTempId(existingElement);
+      if (tempId) {
+        savedByTempId.set(tempId, existingElement);
+      }
+    }
+
+    const elementsToInsert = selectedAIElements.filter(
+      (element) => !savedByTempId.has(element.temp_id)
+    );
+
+    let insertedElements: AccessibleElement[] = [];
+
+    if (elementsToInsert.length > 0) {
+      const elementRows = elementsToInsert.map((element) => ({
         floor_id: floor.id,
         type: mapAIElementTypeToElementType(element.type),
         label: getAIElementLabel(element),
@@ -812,100 +846,127 @@ export default function FloorReviewPage() {
         },
       }));
 
-      const { data: insertedElements, error: elementsError } = await supabase
+      const { data, error } = await supabase
         .from("accessible_elements")
         .insert(elementRows)
         .select("*");
 
-      if (elementsError) {
-        throw elementsError;
+      if (error) {
+        throw error;
       }
 
-      const savedElements = (insertedElements ?? []) as AccessibleElement[];
+      insertedElements = (data ?? []) as AccessibleElement[];
 
-      const savedByTempId = new Map<string, AccessibleElement>();
-
-      for (const element of savedElements) {
-        const metadata = element.metadata as Record<string, unknown> | null;
-        const tempId = metadata?.ai_temp_id;
-
-        if (typeof tempId === "string") {
-          savedByTempId.set(tempId, element);
+      for (const insertedElement of insertedElements) {
+        const tempId = getAIElementTempId(insertedElement);
+        if (tempId) {
+          savedByTempId.set(tempId, insertedElement);
         }
       }
-
-      const edgeRows = acceptedAIEdges
-            .map((edge) => {
-          const from = savedByTempId.get(edge.from_temp_id);
-          const to = savedByTempId.get(edge.to_temp_id);
-
-          if (!from || !to) {
-            return null;
-          }
-
-          const edgeType = mapAIEdgeTypeToEdgeType(edge.edge_type);
-          const distance = estimateDistanceFromCoordinates({
-            floor,
-            fromX: from.x,
-            fromY: from.y,
-            toX: to.x,
-            toY: to.y,
-          });
-
-          return {
-            floor_id: floor.id,
-            from_element_id: from.id,
-            to_element_id: to.id,
-            distance_meters: distance,
-            wheelchair_accessible:
-              edge.wheelchair_accessible ?? edgeType !== "stairs",
-            crutches_accessible: edge.crutches_accessible ?? true,
-            is_bidirectional: true,
-            edge_type: edgeType,
-            slope_percent: null,
-            width_cm: null,
-            step_height_cm: null,
-            surface_type: "unknown",
-            door_type: edgeType === "door" ? "unknown" : null,
-            assistance_required: false,
-            notes: edge.notes || "Connexion proposée par IA.",
-            accessibility_notes:
-              edge.confidence < 0.6
-                ? "Faible confiance IA : à vérifier manuellement."
-                : null,
-          };
-        })
-        .filter((edge): edge is NonNullable<typeof edge> => edge !== null);
-
-      if (edgeRows.length > 0) {
-        const { data: insertedEdges, error: edgesError } = await supabase
-          .from("route_edges")
-          .insert(edgeRows)
-          .select("*");
-
-        if (edgesError) {
-          throw edgesError;
-        }
-
-        setEdges((current) => [
-          ...current,
-          ...((insertedEdges ?? []) as RouteEdge[]),
-        ]);
-      }
-
-      setElements((current) => [...current, ...savedElements]);
-      clearAIProposal();
-
-      setInfoMessage(
-        `Proposition IA validée : ${savedElements.length} points et ${edgeRows.length} connexions ajoutés. Vérifiez les données avant publication.`
-      );
-    } catch (error) {
-      console.error("Erreur sauvegarde proposition IA:", error);
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setSavingAIProposal(false);
     }
+
+    const { data: existingEdgeData, error: existingEdgesError } = await supabase
+      .from("route_edges")
+      .select("*")
+      .eq("floor_id", floor.id);
+
+    if (existingEdgesError) {
+      throw existingEdgesError;
+    }
+
+    const existingEdges = (existingEdgeData ?? []) as RouteEdge[];
+    const existingEdgeKeys = new Set(
+      existingEdges.map((edge) =>
+        getRouteEdgeDedupKey(edge.from_element_id, edge.to_element_id)
+      )
+    );
+
+    const edgeRows = [];
+
+    for (const edge of selectedAIEdges) {
+      const from = savedByTempId.get(edge.from_temp_id);
+      const to = savedByTempId.get(edge.to_temp_id);
+
+      if (!from || !to) continue;
+
+      const dedupKey = getRouteEdgeDedupKey(from.id, to.id);
+
+      if (existingEdgeKeys.has(dedupKey)) {
+        continue;
+      }
+
+      existingEdgeKeys.add(dedupKey);
+
+      const edgeType = mapAIEdgeTypeToEdgeType(edge.edge_type);
+
+      const distance = estimateDistanceFromCoordinates({
+        floor,
+        fromX: from.x,
+        fromY: from.y,
+        toX: to.x,
+        toY: to.y,
+      });
+
+      edgeRows.push({
+        floor_id: floor.id,
+        from_element_id: from.id,
+        to_element_id: to.id,
+        distance_meters: distance,
+        wheelchair_accessible: edge.wheelchair_accessible ?? edgeType !== "stairs",
+        crutches_accessible: edge.crutches_accessible ?? true,
+        is_bidirectional: true,
+        edge_type: edgeType,
+        slope_percent: null,
+        width_cm: null,
+        step_height_cm: null,
+        surface_type: "unknown",
+        door_type: edgeType === "door" ? "unknown" : null,
+        assistance_required: false,
+        notes: edge.notes || "Connexion proposée par IA.",
+        accessibility_notes:
+          edge.confidence < 0.6
+            ? "Faible confiance IA : à vérifier manuellement."
+            : null,
+      });
+    }
+
+    let insertedEdgesCount = 0;
+
+    if (edgeRows.length > 0) {
+      const { data, error } = await supabase
+        .from("route_edges")
+        .insert(edgeRows)
+        .select("*");
+
+      if (error) {
+        throw error;
+      }
+
+      insertedEdgesCount = (data ?? []).length;
+    }
+
+    await Promise.all([loadElements(), loadEdges()]);
+
+    clearAIProposal();
+
+    if (insertedElements.length === 0 && insertedEdgesCount === 0) {
+      setInfoMessage(
+        "Cette proposition IA avait déjà été sauvegardée. Aucun doublon ajouté."
+      );
+    } else {
+      setInfoMessage(
+        `Proposition IA validée : ${insertedElements.length} nouveau(x) point(s) et ${insertedEdgesCount} nouvelle(s) connexion(s) ajoutés.`
+      );
+    }
+  } catch (error) {
+    console.error("Erreur sauvegarde proposition IA:", error);
+    setErrorMessage(getErrorMessage(error));
+    await Promise.all([loadElements(), loadEdges()]);
+  } finally {
+    aiSaveInFlightRef.current = false;
+    setSavingAIProposal(false);
   }
+}
 
   if (loading) {
     return (
@@ -1317,7 +1378,7 @@ export default function FloorReviewPage() {
                     className="flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/30 bg-emerald-400/10 px-4 py-3 text-sm font-medium text-emerald-100 hover:bg-emerald-400/15 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <CheckCircle2 size={16} />
-                    Tout accepter
+                    Tout selectionner
                   </button>
 
                   <button
@@ -1327,7 +1388,7 @@ export default function FloorReviewPage() {
                     className="flex items-center justify-center gap-2 rounded-2xl border border-red-300/30 bg-red-400/10 px-4 py-3 text-sm font-medium text-red-100 hover:bg-red-400/15 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Trash2 size={16} />
-                    Tout rejeter
+                    Tout désélectionner
                   </button>
                 </div>
 
@@ -1490,7 +1551,7 @@ export default function FloorReviewPage() {
                   ) : (
                     <Save size={18} />
                   )}
-                  Sauvegarder uniquement les éléments acceptés
+                  Valider et ajouter au plan
                 </button>
 
                 <button
@@ -1768,21 +1829,24 @@ function MapMarker({
   element: AccessibleElement;
   index: number;
 }) {
+  const markerLabel = element.label || labelByType[element.type];
+
   return (
     <div
-      className="absolute z-20"
+      className="pointer-events-auto absolute z-20 -translate-x-1/2 -translate-y-1/2"
       style={{
         left: `${clamp01(element.x) * 100}%`,
         top: `${clamp01(element.y) * 100}%`,
       }}
+      title={markerLabel}
     >
-      <div className="relative">
-        <div className="absolute left-0 top-0 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-cyan-400 text-xs font-bold text-slate-950 shadow-lg shadow-cyan-950/40 ring-4 ring-slate-950/70">
+      <div className="group relative">
+        <div className="flex h-5 min-w-5 items-center justify-center rounded-full border border-slate-950/70 bg-cyan-400 px-1 text-[10px] font-bold leading-none text-slate-950 shadow-md shadow-cyan-950/30 ring-2 ring-slate-950/60">
           {index}
         </div>
 
-        <div className="absolute left-5 top-0 hidden -translate-y-1/2 whitespace-nowrap rounded-full bg-slate-950/85 px-3 py-1 text-xs text-white backdrop-blur md:block">
-          {element.label || labelByType[element.type]}
+        <div className="pointer-events-none absolute left-1/2 top-0 hidden -translate-x-1/2 -translate-y-[130%] whitespace-nowrap rounded-lg bg-slate-950/90 px-2 py-1 text-[10px] text-white shadow-lg backdrop-blur group-hover:block">
+          {markerLabel}
         </div>
       </div>
     </div>
@@ -1897,6 +1961,17 @@ function getAIElementLabel(element: AIElementProposal) {
   return labelByType[mapAIElementTypeToElementType(element.type)];
 }
 
+function getAIElementTempId(element: AccessibleElement) {
+  const metadata = element.metadata as { ai_temp_id?: unknown } | null;
+  const tempId = metadata?.ai_temp_id;
+
+  return typeof tempId === "string" ? tempId : null;
+}
+
+function getRouteEdgeDedupKey(fromElementId: string, toElementId: string) {
+  return [fromElementId, toElementId].sort().join("__");
+}
+
 function clamp01(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
@@ -1934,21 +2009,26 @@ function AIMapMarker({
   element: AIElementProposal;
   index: number;
 }) {
+  const markerLabel = `${getAIElementLabel(element)} · ${(
+    element.confidence * 100
+  ).toFixed(0)}%`;
+
   return (
     <div
-      className="absolute z-30"
+      className="pointer-events-auto absolute z-30 -translate-x-1/2 -translate-y-1/2"
       style={{
         left: `${clamp01(element.x) * 100}%`,
         top: `${clamp01(element.y) * 100}%`,
       }}
+      title={`IA${index} · ${markerLabel}`}
     >
-      <div className="relative">
-        <div className="absolute left-0 top-0 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-amber-300 text-xs font-bold text-slate-950 shadow-lg shadow-amber-950/40 ring-4 ring-slate-950/70">
-          IA{index}
+      <div className="group relative">
+        <div className="flex h-5 min-w-5 items-center justify-center rounded-full border border-slate-950/70 bg-amber-300 px-1 text-[10px] font-bold leading-none text-slate-950 shadow-md shadow-amber-950/30 ring-2 ring-slate-950/60">
+          {index}
         </div>
 
-        <div className="absolute left-5 top-0 hidden -translate-y-1/2 whitespace-nowrap rounded-full bg-slate-950/85 px-3 py-1 text-xs text-amber-100 backdrop-blur md:block">
-          {getAIElementLabel(element)} · {(element.confidence * 100).toFixed(0)}%
+        <div className="pointer-events-none absolute left-1/2 top-0 hidden -translate-x-1/2 -translate-y-[130%] whitespace-nowrap rounded-lg bg-slate-950/90 px-2 py-1 text-[10px] text-amber-100 shadow-lg backdrop-blur group-hover:block">
+          IA{index} · {markerLabel}
         </div>
       </div>
     </div>
