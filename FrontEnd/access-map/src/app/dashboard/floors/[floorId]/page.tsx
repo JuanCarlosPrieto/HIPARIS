@@ -658,12 +658,19 @@ export default function FloorReviewPage() {
 
       const imageBlob = await imageResponse.blob();
 
-      const proposal = await analyzePlanWithAI({
+      const rawProposal = await analyzePlanWithAI({
         image: imageBlob,
         floorId: floor.id,
         realWidthMeters: floor.real_width_meters,
         realHeightMeters: floor.real_height_meters,
       });
+
+      const proposal = filterAIProposalInsideBounds(rawProposal);
+
+      setAiProposal(proposal);
+      setInfoMessage(
+        `Analyse IA terminée : ${proposal.elements.length} points et ${proposal.edges.length} connexions proposés.`
+      );
 
       setAiProposal(proposal);
 
@@ -1082,6 +1089,20 @@ export default function FloorReviewPage() {
                     );
                   })}
 
+                  {aiProposal?.floor_plan_bounds && (
+                    <rect
+                      x={clamp01(aiProposal.floor_plan_bounds.x) * 100}
+                      y={clamp01(aiProposal.floor_plan_bounds.y) * 100}
+                      width={clamp01(aiProposal.floor_plan_bounds.width) * 100}
+                      height={clamp01(aiProposal.floor_plan_bounds.height) * 100}
+                      fill="none"
+                      stroke="#facc15"
+                      strokeWidth="0.4"
+                      strokeDasharray="1.5 1"
+                      opacity="0.9"
+                    />
+                  )}
+
                   {aiProposal?.edges.map((edge, index) => {
                     const from = aiProposal.elements.find(
                       (element) => element.temp_id === edge.from_temp_id
@@ -1475,18 +1496,20 @@ function MapMarker({
 }) {
   return (
     <div
-      className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-2"
+      className="absolute z-20"
       style={{
-        left: `${element.x * 100}%`,
-        top: `${element.y * 100}%`,
+        left: `${clamp01(element.x) * 100}%`,
+        top: `${clamp01(element.y) * 100}%`,
       }}
     >
-      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-cyan-400 text-xs font-bold text-slate-950 shadow-lg shadow-cyan-950/40 ring-4 ring-slate-950/70">
-        {index}
-      </div>
+      <div className="relative">
+        <div className="absolute left-0 top-0 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-cyan-400 text-xs font-bold text-slate-950 shadow-lg shadow-cyan-950/40 ring-4 ring-slate-950/70">
+          {index}
+        </div>
 
-      <div className="hidden rounded-full bg-slate-950/85 px-3 py-1 text-xs text-white backdrop-blur md:block">
-        {element.label || labelByType[element.type]}
+        <div className="absolute left-5 top-0 hidden -translate-y-1/2 whitespace-nowrap rounded-full bg-slate-950/85 px-3 py-1 text-xs text-white backdrop-blur md:block">
+          {element.label || labelByType[element.type]}
+        </div>
       </div>
     </div>
   );
@@ -1639,18 +1662,20 @@ function AIMapMarker({
 }) {
   return (
     <div
-      className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-2"
+      className="absolute z-30"
       style={{
         left: `${clamp01(element.x) * 100}%`,
         top: `${clamp01(element.y) * 100}%`,
       }}
     >
-      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-300 text-xs font-bold text-slate-950 shadow-lg shadow-amber-950/40 ring-4 ring-slate-950/70">
-        IA{index}
-      </div>
+      <div className="relative">
+        <div className="absolute left-0 top-0 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-amber-300 text-xs font-bold text-slate-950 shadow-lg shadow-amber-950/40 ring-4 ring-slate-950/70">
+          IA{index}
+        </div>
 
-      <div className="hidden rounded-full bg-slate-950/85 px-3 py-1 text-xs text-amber-100 backdrop-blur md:block">
-        {getAIElementLabel(element)} · {(element.confidence * 100).toFixed(0)}%
+        <div className="absolute left-5 top-0 hidden -translate-y-1/2 whitespace-nowrap rounded-full bg-slate-950/85 px-3 py-1 text-xs text-amber-100 backdrop-blur md:block">
+          {getAIElementLabel(element)} · {(element.confidence * 100).toFixed(0)}%
+        </div>
       </div>
     </div>
   );
@@ -1666,4 +1691,55 @@ function getErrorMessage(error: unknown) {
   }
 
   return "Erreur inconnue.";
+}
+
+
+function isInsideAIPlanBounds(
+  point: { x: number; y: number },
+  bounds: { x: number; y: number; width: number; height: number },
+  margin = 0.015
+) {
+  return (
+    point.x >= bounds.x - margin &&
+    point.x <= bounds.x + bounds.width + margin &&
+    point.y >= bounds.y - margin &&
+    point.y <= bounds.y + bounds.height + margin
+  );
+}
+
+function filterAIProposalInsideBounds(proposal: AIPlanProposal): AIPlanProposal {
+  const bounds = proposal.floor_plan_bounds;
+
+  if (!bounds) {
+    return proposal;
+  }
+
+  const validElements = proposal.elements.filter((element) =>
+    isInsideAIPlanBounds(element, bounds)
+  );
+
+  const validTempIds = new Set(
+    validElements.map((element) => element.temp_id)
+  );
+
+  const validEdges = proposal.edges.filter(
+    (edge) =>
+      validTempIds.has(edge.from_temp_id) &&
+      validTempIds.has(edge.to_temp_id)
+  );
+
+  const removedCount = proposal.elements.length - validElements.length;
+
+  return {
+    ...proposal,
+    elements: validElements,
+    edges: validEdges,
+    warnings:
+      removedCount > 0
+        ? [
+            ...proposal.warnings,
+            `${removedCount} élément(s) IA supprimé(s), car hors de la zone utile du plan.`,
+          ]
+        : proposal.warnings,
+  };
 }

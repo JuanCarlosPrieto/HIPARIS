@@ -40,7 +40,15 @@ export type AIEdgeProposal = {
   notes: string;
 };
 
+export type AIFloorPlanBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type AIPlanProposal = {
+  floor_plan_bounds?: AIFloorPlanBounds | null;
   elements: AIElementProposal[];
   edges: AIEdgeProposal[];
   warnings: string[];
