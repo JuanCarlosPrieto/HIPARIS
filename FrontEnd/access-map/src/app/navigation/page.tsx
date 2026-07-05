@@ -1693,33 +1693,34 @@ function MapMarker({
   index: number;
   highlighted: boolean;
 }) {
+  const description = getElementDescription(element);
+  const label = element.label || labelByType[element.type];
+
   return (
     <div
-      className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-2"
+      title={description ? `${label} — ${description}` : label}
+      className={`pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 rounded-2xl border px-3 py-2 text-xs shadow-lg backdrop-blur ${
+        highlighted
+          ? "border-cyan-300 bg-cyan-400 text-slate-950"
+          : "border-white/20 bg-slate-950/85 text-slate-100"
+      }`}
       style={{
         left: `${element.x * 100}%`,
         top: `${element.y * 100}%`,
       }}
     >
-      <div
-        className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold shadow-lg ring-4 ${
-          highlighted
-            ? "bg-cyan-300 text-slate-950 ring-cyan-300/30"
-            : "bg-slate-950 text-cyan-200 ring-cyan-400/40"
-        }`}
-      >
-        {index}
+      <div className="flex items-center gap-2">
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/15 text-[11px] font-bold">
+          {index}
+        </span>
+        <span className="max-w-36 truncate font-medium">{label}</span>
       </div>
 
-      <div
-        className={`hidden rounded-full px-3 py-1 text-sm font-medium backdrop-blur sm:block ${
-          highlighted
-            ? "bg-cyan-300 text-slate-950"
-            : "bg-slate-950/85 text-white"
-        }`}
-      >
-        {element.label || labelByType[element.type]}
-      </div>
+      {description && (
+        <p className="mt-1 max-w-48 line-clamp-2 text-[11px] opacity-80">
+          {description}
+        </p>
+      )}
     </div>
   );
 }
