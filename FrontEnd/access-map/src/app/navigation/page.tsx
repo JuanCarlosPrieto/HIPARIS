@@ -164,6 +164,8 @@ export default function NavigationPage() {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
 
+  const [mapZoom, setMapZoom] = useState(1);
+
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [buildings, setBuildings] = useState<Building[]>([]);
   const [floors, setFloors] = useState<Floor[]>([]);
@@ -888,6 +890,35 @@ export default function NavigationPage() {
           <div className="mb-5 flex items-center justify-between gap-4">
             <div>
               <h2 className="text-2xl font-semibold">Plan accessible</h2>
+              <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900 p-1">
+                <button
+                  type="button"
+                  onClick={() => setMapZoom((zoom) => Math.max(0.75, zoom - 0.25))}
+                  className="rounded-xl px-3 py-2 text-sm hover:bg-white/10"
+                >
+                  −
+                </button>
+
+                <span className="min-w-14 text-center text-xs text-slate-300">
+                  {Math.round(mapZoom * 100)}%
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => setMapZoom((zoom) => Math.min(3, zoom + 0.25))}
+                  className="rounded-xl px-3 py-2 text-sm hover:bg-white/10"
+                >
+                  +
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setMapZoom(1)}
+                  className="rounded-xl px-3 py-2 text-xs text-slate-400 hover:bg-white/10"
+                >
+                  Reset
+                </button>
+              </div>
               <p className="mt-1 text-sm leading-6 text-slate-400">
                 {selectedOrganization?.name ?? "Organisation"} ·{" "}
                 {selectedBuilding?.name ?? "Bâtiment"} ·{" "}
@@ -954,22 +985,24 @@ export default function NavigationPage() {
                         text="Aucun plan disponible pour cet étage."
                       />
                     ) : (
-                      <div className="relative flex min-h-[420px] items-center justify-center overflow-auto rounded-3xl bg-slate-900 p-3 sm:min-h-[540px] sm:p-4">
-                        <div className="relative max-h-[720px] w-full max-w-4xl">
+                      <div className="relative min-h-[520px] overflow-auto rounded-3xl bg-slate-900 p-4">
+                        <div
+                          className="relative inline-block"
+                          style={{
+                            transform: `scale(${mapZoom})`,
+                            transformOrigin: "top left",
+                            marginRight: mapZoom > 1 ? `${(mapZoom - 1) * 100}%` : undefined,
+                            marginBottom: mapZoom > 1 ? `${(mapZoom - 1) * 100}%` : undefined,
+                          }}
+                        >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={floorSignedUrl}
-                            alt={`Plan accessible - ${
-                              floor ? `${floor.name}, niveau ${floor.level}` : "étage"
-                            }`}
-                            className="h-auto w-full rounded-2xl object-contain"
+                            alt={floor?.name ?? "Plan accessible"}
+                            className="block max-w-none rounded-2xl"
                           />
 
-                          <svg
-                            className="pointer-events-none absolute inset-0 h-full w-full"
-                            viewBox="0 0 100 100"
-                            preserveAspectRatio="none"
-                          >
+                          <svg className="pointer-events-none absolute inset-0 h-full w-full">
                             {floorEdges.map((edge) => {
                               const from = getElementById(edge.from_element_id);
                               const to = getElementById(edge.to_element_id);
@@ -982,25 +1015,17 @@ export default function NavigationPage() {
                               return (
                                 <line
                                   key={edge.id}
-                                  x1={from.x}
-                                  y1={from.y}
-                                  x2={to.x}
-                                  y2={to.y}
-                                  stroke={
+                                  x1={`${from.x * 100}%`}
+                                  y1={`${from.y * 100}%`}
+                                  x2={`${to.x * 100}%`}
+                                  y2={`${to.y * 100}%`}
+                                  strokeWidth={isInRoute ? 5 : 3}
+                                  className={
                                     isInRoute
-                                      ? "#67e8f9"
+                                      ? "stroke-cyan-300"
                                       : isAllowed
-                                      ? "#94a3b8"
-                                      : "#f87171"
-                                  }
-                                  strokeWidth={isInRoute ? "2" : "0.55"}
-                                  strokeLinecap="round"
-                                  strokeDasharray={
-                                    isInRoute
-                                      ? "0"
-                                      : edge.wheelchair_accessible
-                                      ? "0"
-                                      : "2 1.5"
+                                        ? "stroke-emerald-300/70"
+                                        : "stroke-rose-300/60"
                                   }
                                 />
                               );
