@@ -1192,10 +1192,10 @@ export default function FloorReviewPage() {
                   )}
 
                   {acceptedAIEdges.map((edge, index) => {
-                    const from = aiProposal.elements.find(
+                    const from = aiProposal?.elements.find(
                       (element) => element.temp_id === edge.from_temp_id
                     );
-                    const to = aiProposal.elements.find(
+                    const to = aiProposal?.elements.find(
                       (element) => element.temp_id === edge.to_temp_id
                     );
 
