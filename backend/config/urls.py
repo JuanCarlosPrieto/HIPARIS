@@ -15,9 +15,18 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import path, include
+
+def root_health(request):
+    return JsonResponse({
+        "status": "ok",
+        "service": "hiparis-ai",
+        "message": "HIPARIS backend is running",
+    })
 
 
 urlpatterns = [
+    path("", root_health, name="root-health"),
     path('api/', include('api.urls')),
 ]
