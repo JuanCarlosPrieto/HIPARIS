@@ -985,24 +985,21 @@ export default function NavigationPage() {
                         text="Aucun plan disponible pour cet étage."
                       />
                     ) : (
-                      <div className="relative min-h-[520px] overflow-auto rounded-3xl bg-slate-900 p-4">
-                        <div
-                          className="relative inline-block"
-                          style={{
-                            transform: `scale(${mapZoom})`,
-                            transformOrigin: "top left",
-                            marginRight: mapZoom > 1 ? `${(mapZoom - 1) * 100}%` : undefined,
-                            marginBottom: mapZoom > 1 ? `${(mapZoom - 1) * 100}%` : undefined,
-                          }}
-                        >
+                      <div className="w-full overflow-hidden rounded-3xl border border-white/10 bg-slate-950/70">
+                        <div className="relative w-full">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={floorSignedUrl}
-                            alt={floor?.name ?? "Plan accessible"}
-                            className="block max-w-none rounded-2xl"
+                            alt={floor ? `Plan de ${floor.name}` : "Plan accessible"}
+                            className="block h-auto w-full select-none"
+                            draggable={false}
                           />
 
-                          <svg className="pointer-events-none absolute inset-0 h-full w-full">
+                          <svg
+                            className="pointer-events-none absolute inset-0 h-full w-full"
+                            viewBox="0 0 100 100"
+                            preserveAspectRatio="none"
+                          >
                             {floorEdges.map((edge) => {
                               const from = getElementById(edge.from_element_id);
                               const to = getElementById(edge.to_element_id);
@@ -1015,18 +1012,15 @@ export default function NavigationPage() {
                               return (
                                 <line
                                   key={edge.id}
-                                  x1={`${from.x * 100}%`}
-                                  y1={`${from.y * 100}%`}
-                                  x2={`${to.x * 100}%`}
-                                  y2={`${to.y * 100}%`}
-                                  strokeWidth={isInRoute ? 5 : 3}
-                                  className={
-                                    isInRoute
-                                      ? "stroke-cyan-300"
-                                      : isAllowed
-                                        ? "stroke-emerald-300/70"
-                                        : "stroke-rose-300/60"
-                                  }
+                                  x1={from.x}
+                                  y1={from.y}
+                                  x2={to.x}
+                                  y2={to.y}
+                                  stroke={isInRoute ? "#22c55e" : isAllowed ? "#38bdf8" : "#ef4444"}
+                                  strokeWidth={isInRoute ? 1.6 : 0.8}
+                                  strokeDasharray={isAllowed ? undefined : "2 2"}
+                                  vectorEffect="non-scaling-stroke"
+                                  opacity={isInRoute ? 1 : 0.55}
                                 />
                               );
                             })}
