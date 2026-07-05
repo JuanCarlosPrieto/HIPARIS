@@ -1133,29 +1133,29 @@ function buildVirtualVerticalEdges(
 ): RoutingEdge[] {
   const floorById = new Map(floors.map((floor) => [floor.id, floor]));
 
-  const elevators = elements.filter(
-    (element) => element.type === "elevator" && element.label
-  );
+  const verticalConnectors = elements.filter((element) => {
+    return isVerticalConnector(element) && getVerticalConnectionKey(element);
+  });
 
   const groups = new Map<string, AccessibleElement[]>();
 
-  for (const elevator of elevators) {
-    const key = normalizeVerticalLabel(elevator.label);
-
+  for (const connector of verticalConnectors) {
+    const key = getVerticalConnectionKey(connector);
     if (!key) continue;
 
     const group = groups.get(key) ?? [];
-    group.push(elevator);
+    group.push(connector);
     groups.set(key, group);
   }
 
   const virtualEdges: RoutingEdge[] = [];
 
   for (const group of groups.values()) {
+    if (group.length < 2) continue;
+
     const sorted = [...group].sort((a, b) => {
       const floorA = floorById.get(a.floor_id);
       const floorB = floorById.get(b.floor_id);
-
       return (floorA?.level ?? 0) - (floorB?.level ?? 0);
     });
 
@@ -1166,28 +1166,37 @@ function buildVirtualVerticalEdges(
       const fromFloor = floorById.get(from.floor_id);
       const toFloor = floorById.get(to.floor_id);
 
-      const levelDelta = Math.abs((toFloor?.level ?? 0) - (fromFloor?.level ?? 0));
+      const levelDelta = Math.abs(
+        (toFloor?.level ?? 0) - (fromFloor?.level ?? 0)
+      );
+
+      const edgeType: EdgeType =
+        from.type === "ramp"
+          ? "ramp"
+          : from.type === "stairs"
+            ? "stairs"
+            : "elevator";
 
       virtualEdges.push({
-        id: `virtual-elevator-${from.id}-${to.id}`,
+        id: `virtual-${edgeType}-${from.id}-${to.id}`,
         floor_id: from.floor_id,
         from_element_id: from.id,
         to_element_id: to.id,
         distance_meters: Math.max(5, levelDelta * 6),
-        wheelchair_accessible: true,
+        wheelchair_accessible: edgeType !== "stairs",
         crutches_accessible: true,
         is_bidirectional: true,
-        notes: "Connexion verticale virtuelle entre étages",
+        notes: `Connexion verticale virtuelle: ${edgeType}`,
         created_at: new Date().toISOString(),
-
-        edge_type: "elevator",
-        slope_percent: null,
+        edge_type: edgeType,
+        slope_percent: edgeType === "ramp" ? 6 : null,
         width_cm: null,
-        step_height_cm: null,
+        step_height_cm: edgeType === "stairs" ? 16 : null,
         surface_type: "normal",
         door_type: null,
         assistance_required: false,
-        accessibility_notes: "Connexion générée automatiquement entre ascenseurs de même nom.",
+        accessibility_notes:
+          "Connexion générée automatiquement à partir du code inter-étages.",
         synthetic: true,
       });
     }
@@ -1861,4 +1870,43 @@ function getEdgeInstruction({
   }
 
   return `Continuez sur ${distance} m vers ${toLabel}.`;
+}
+
+function getMetadataString(
+  element: AccessibleElement,
+  key: string
+): string {
+  const metadata = element.metadata ?? {};
+  const value = metadata[key];
+
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getElementDescription(element: AccessibleElement): string {
+  return getMetadataString(element, "description");
+}
+
+function getVerticalConnectionKey(element: AccessibleElement): string {
+  const explicitKey = getMetadataString(element, "vertical_connection_key");
+
+  if (explicitKey) {
+    return normalizeVerticalLabel(`${element.type}:${explicitKey}`);
+  }
+
+  const label = element.label ?? "";
+  const description = getElementDescription(element);
+
+  if (!label && !description) {
+    return "";
+  }
+
+  return normalizeVerticalLabel(`${element.type}:${label} ${description}`);
+}
+
+function isVerticalConnector(element: AccessibleElement): boolean {
+  return (
+    element.type === "elevator" ||
+    element.type === "ramp" ||
+    element.type === "stairs"
+  );
 }
